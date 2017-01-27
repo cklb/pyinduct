@@ -8,6 +8,8 @@ PyInduct
 .. image:: https://img.shields.io/pypi/v/pyinduct.svg
         :target: https://pypi.python.org/pypi/pyinduct
 
+.. image:: https://zenodo.org/badge/49257835.svg
+       :target: https://zenodo.org/badge/latestdoi/49257835
 
 This project provides a python toolbox for simulation and control design of infinite dimensional systems.
 

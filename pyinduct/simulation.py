@@ -57,7 +57,6 @@ class SimulationInput(object, metaclass=ABCMeta):
 
         return np.atleast_1d(out["output"])
 
-    @abstractmethod
     def _calc_output(self, **kwargs):
         """
         Handle that has to be implemented for output calculation.
@@ -1063,7 +1062,7 @@ def simulate_state_space(state_space, initial_state, temp_domain, settings=None)
     input_handle = state_space.input
 
     if not isinstance(input_handle, SimulationInput):
-        raise TypeError("only simulation.SimulationInput supported.")
+        raise TypeError("only SimulationInput supported.")
 
     q = [initial_state]
     t = [temp_domain[0]]

@@ -1,4 +1,5 @@
 import numpy as np
+from copy import copy
 
 import sympy as sp
 import pyinduct as pi
@@ -44,10 +45,9 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
     char_eq_num = sp.lambdify(s, char_eq, modules="numpy")
 
     # find eigenvalues
-    grid = [np.linspace(-1, 1), np.linspace(-1, 100)]
+    grid = [np.linspace(-1, 1), np.linspace(0, 100)]
     roots = pi.find_roots(char_eq_num,
                           grid,
-                          sort_mode="component",
                           cmplx=True)
 
     # automatically check for double roots, but comes with numeric problems
@@ -61,11 +61,12 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
     # eig_values_ds = roots_ds[pos_idx_ds]
     # pi.visualize_roots(eig_values_ds, grid, char_eq_ds_num, cmplx=True)
 
-    pos_idx = np.imag(roots) >= 0
-    eig_values = roots[pos_idx]
+    # clear numeric jitter
+    roots = 1j*np.imag(roots)
+    eig_values = roots[:order]
 
     if debug:
-        grid = [np.linspace(-1, 1), np.linspace(-1, 100)]
+        grid = [np.linspace(-1, 1), np.linspace(0, 100)]
         pi.visualize_roots(eig_values, grid, char_eq_num, cmplx=True)
 
     def w0_k_factory(eigenvalue, multiplicity=1, derivative_order=0):
@@ -81,18 +82,19 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
 
         """
         w0_derivative = w0.diff(s, multiplicity - 1).diff(z, derivative_order)
+        # w0_s = sp.re(w0_derivative.subs(s, eigenvalue))
         w0_s = w0_derivative.subs(s, eigenvalue)
         return sp.lambdify(z, w0_s, modules="numpy")
 
     fracs = []
-    for sk in eig_values[:order]:
+    for sk in eig_values:
         multiplicity = 1
 
         # TODO remove hardcoded check and better look into roots of char_ds
         # if sk in eig_values_ds:
-        if np.isclose(sk, 0):
+        # if np.isclose(sk, 0):
             # this will create the zero function -> useless
-            multiplicity += 1
+            # multiplicity += 1
 
         for m in range(1, multiplicity + 1):
             frac = pi.Function(domain=spat_domain.bounds,
@@ -151,8 +153,8 @@ def calc_flat_base(eig_values, pseudo_domain, debug=False):
 
         # TODO remove hardcoded check and better look into roots of char_ds
         # if sk in eig_values_ds:
-        if np.isclose(sk, 0):
-            multiplicity += 1
+        # if np.isclose(sk, 0):
+        #     multiplicity += 1
 
         for m in range(1, multiplicity + 1):
             frac = pi.Function(domain=pseudo_domain.bounds,
@@ -173,6 +175,155 @@ def calc_flat_base(eig_values, pseudo_domain, debug=False):
     return pi.Base(fracs)
 
 
+class SWMStateVector(pi.ComposedFunctionVector):
+    """
+    vector that represents the state of the string with mass,
+    containing (x'(z, t), x.(z, t), x(0, t), x.(0, t)) at t=0
+    """
+
+    def __init__(self, functions, scalars, origin_label):
+        if len(functions) != 2 or len(scalars) != 2:
+            raise TypeError("wrong dimensions!")
+
+        super().__init__(functions, scalars)
+        self.orig_lbl = origin_label
+
+    @property
+    def funcs(self):
+        return self.members["funcs"]
+
+    @property
+    def scalars(self):
+        return self.members["scalars"]
+
+    def transformation_hint(self, info, target):
+        """
+        returns ready to use handle for weight transformation from pure Function
+        Base, otherwise super method is returned.
+        """
+        if target is False:
+            raise NotImplementedError
+
+        if target and isinstance(info.src_base[0], pi.Function):
+            if info.dst_order > info.src_order - 1:
+                return None, None
+
+            if info.src_lbl == self.orig_lbl:
+                return self._transform_from_functions_factory(info), None
+            else:
+                # create transform from someone who knows how to convert
+                name = info.src_lbl + "_state"
+
+                # from current src to assistant system
+                assistant_info = copy(info)
+                assistant_info.dst_lbl = name
+                assistant_info.dst_base = pi.get_base(name)
+                assistant_info.dst_order = info.dst_order
+
+                # from assistant system to dst
+                target_info = copy(info)
+                target_info.src_lbl = name
+                target_info.src_base = pi.get_base(name)
+                target_info.src_order = info.dst_order
+
+                super_handle, super_hint = super().transformation_hint(
+                    target_info, True)
+                return super_handle, assistant_info
+
+        # fallback method of super class
+        return super().transformation_hint(info, target)
+
+    @staticmethod
+    def _transform_from_functions_factory(info):
+        """
+        calculates transformation that converts weights from src to dst basis
+        """
+        src_dim = info.src_base.fractions.size
+        dst_dim = info.dst_base.fractions.size
+
+        if dst_dim % 2 != 0:
+            return None
+
+        mat = np.zeros((dst_dim * (info.dst_order + 1),
+                        src_dim * (info.src_order + 1)))
+
+        # generate core of mapping
+        core = np.zeros((dst_dim, 2 * src_dim))
+        for i in range(src_dim):
+            core[2 * i, i] = 1
+            core[2 * i - 1, i + src_dim] = 1
+
+        # fill with copies until needed order is accomplished
+        for o in range(info.dst_order + 1):
+            mat[o * dst_dim:(1 + o) * dst_dim,
+            o * 2 * src_dim:(1 + o) * 2 * src_dim] = core
+
+        def handle(weights):
+            return np.dot(mat, weights)
+
+        return handle
+
+    # def scale(self, factor):
+    #     return HCStateVector(np.array([func.scale(factor) for func in self.members["funcs"]]),
+    #                          np.array([scal * factor for scal in self.members["scalars"]]),
+    #                          self.orig_lbl)
+
+    def evaluation_hint(self, values):
+        return self(values)
+
+
+def create_function_vectors(label, eig_vals=None, zero_padding=False):
+    """
+    builds a complete set (basis) of function vectors, length will be 2 times
+    the length of the input.
+
+    Args:
+    :param label: label of function set that forms the basis of the state
+        approximation
+    :param eig_vals: eigenvalues, corresponding to the shapefunctions,
+        described by label
+    :param zero_padding: perform padding with zeros to construct function vector
+        from simulation shapefunctions
+    :return:
+    """
+    entries = []
+    funcs = pi.get_base(label).fractions
+    funcs_dz = pi.get_base(label).derive(1).fractions
+    zero_func = pi.Function(lambda z: 0, nonzero=(0, 0))
+
+    for idx, (func, func_dz) in enumerate(zip(funcs, funcs_dz)):
+        if zero_padding:
+            entries.append(SWMStateVector(functions=(func_dz, zero_func),
+                                          scalars=(func(0), 0),
+                                          origin_label=label))
+            entries.append(SWMStateVector(functions=(zero_func, func),
+                                          scalars=(0, func(0)),
+                                          origin_label=label))
+        else:
+            entries.append(SWMStateVector(functions=(func_dz,
+                                                     func.scale(eig_vals[idx])),
+                                          scalars=(func(0),
+                                                   eig_vals[idx] * func(0)),
+                                          origin_label=label))
+
+            # construct extra function vector for double eigenvalue at s=0
+            if np.isclose(eig_vals[idx], 0, atol=1e-3) and False:
+                # TODO verify what is correct in the end (probably both will deliver the same result)
+                if 1:
+                    # derive only 2nd part of state vector
+                    entries.append(HCStateVector(functions=(zero_func, func),
+                                                 scalars=(0, func(0)),
+                                                 origin_label=label))
+                else:
+                    # derive whole state vector
+                    # TODO calculate lim(d/ds w=(s, z)) for s->0
+                    entries.append(HCStateVector(functions=(extra_funcs[1], func),
+                                                 scalars=(extra_funcs[0](0), func(0)),
+                                                 origin_label=label))
+
+    return pi.Base(entries)
+
+
 def calc_controller(exp_base_lbl, flat_base_lbl, parameter):
     """
     Generate the control law for a certain dynamic.
@@ -190,12 +341,13 @@ def calc_controller(exp_base_lbl, flat_base_lbl, parameter):
 
     p = parameter
     terms = [
-        pi.ScalarTerm(y_ddz(-p.tau), scale=(1-p.alpha)),
-        pi.ScalarTerm(y_dz(p.tau), scale=(p.sigma * p.tau / 2 - p.kappa1)),
-        pi.ScalarTerm(y_dz(-p.tau),
-                      scale=(p.alpha * p.kappa1 - p.sigma * p.tau / 2)),
-        pi.ScalarTerm(y(p.tau), scale=(-p.kappa0)),
-        pi.ScalarTerm(y(-p.tau), scale=(p.alpha * p.kappa0)),
+        pi.ScalarTerm(y_ddz(0), scale=0),
+        # pi.ScalarTerm(y_ddz(-p.tau), scale=(1-p.alpha)),
+        # pi.ScalarTerm(y_dz(p.tau), scale=(p.sigma * p.tau / 2 - p.kappa1)),
+        # pi.ScalarTerm(y_dz(-p.tau),
+        #               scale=(p.alpha * p.kappa1 - p.sigma * p.tau / 2)),
+        # pi.ScalarTerm(y(p.tau), scale=(-p.kappa0)),
+        # pi.ScalarTerm(y(-p.tau), scale=(p.alpha * p.kappa0)),
     ]
 
     law = pi.WeakFormulation(terms, name="flat_law")

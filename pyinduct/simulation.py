@@ -921,7 +921,9 @@ def parse_weak_formulation(weak_form, finalize=True):
                     raise NotImplementedError
                 func = placeholders["functions"][0]
                 test_funcs = get_base(func.data["func_lbl"]).derive(func.order[1])
-                result = calculate_scalar_product_matrix(dot_product_l2, test_funcs, shape_funcs)
+                result = calculate_scalar_product_matrix(dot_product_l2,
+                                                         test_funcs.fractions,
+                                                         shape_funcs.fractions)
             else:
                 # extract constant term and compute integral
                 a = Scalars(np.atleast_2d([integrate_function(func, func.nonzero)[0]
@@ -1120,9 +1122,10 @@ def evaluate_approximation(base_label, weights, temp_domain, spat_domain, spat_o
 
     # evaluate shape functions at given points
     shape_vals = np.array([func.evaluation_hint(spat_domain) for func in funcs])
+    # shape_vals = np.moveaxis(shape_vals, 0, -2)
 
     def eval_spatially(weight_vector):
-        return np.real_if_close(np.dot(weight_vector, shape_vals), 1000)
+        return np.real_if_close(np.dot(weight_vector, shape_vals), tol=100)
 
     data = np.apply_along_axis(eval_spatially, 1, weights)
     return EvalData([temp_domain.points, spat_domain.points], data, name=name)

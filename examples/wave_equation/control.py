@@ -62,8 +62,8 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
     # pi.visualize_roots(eig_values_ds, grid, char_eq_ds_num, cmplx=True)
 
     # clear numeric jitter
-    roots = 1j*np.imag(roots)
-    eig_values = roots[:order]
+    roots = 1j*np.imag(roots)[:order]
+    eig_values = np.hstack([-1*roots[::-1], roots])
 
     if debug:
         grid = [np.linspace(-1, 1), np.linspace(0, 100)]
@@ -81,20 +81,20 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
         Returns:
 
         """
-        w0_derivative = w0.diff(s, multiplicity - 1).diff(z, derivative_order)
-        # w0_s = sp.re(w0_derivative.subs(s, eigenvalue))
+        w0_main = w0 * z**(multiplicity - 1)
+        w0_derivative = w0_main.diff(z, derivative_order)
         w0_s = w0_derivative.subs(s, eigenvalue)
-        return sp.lambdify(z, w0_s, modules="numpy")
+        return sp.lambdify(z, sp.re(w0_s), modules="numpy")
 
     fracs = []
-    for sk in eig_values:
-        multiplicity = 1
+    multiplicity = 1
+    for idx, sk in enumerate(eig_values):
+        if multiplicity == 2:
+            multiplicity = 1
+            continue
 
-        # TODO remove hardcoded check and better look into roots of char_ds
-        # if sk in eig_values_ds:
-        # if np.isclose(sk, 0):
-            # this will create the zero function -> useless
-            # multiplicity += 1
+        if idx < len(eig_values) - 1 and eig_values[idx + 1] == sk:
+            multiplicity += 1
 
         for m in range(1, multiplicity + 1):
             frac = pi.Function(domain=spat_domain.bounds,
@@ -109,10 +109,14 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
                                                 derivative_order=2)])
             fracs.append(frac)
 
-    if debug:
-        pi.visualize_functions(fracs)
+    base = pi.Base(fracs)
 
-    return pi.Base(fracs), eig_values
+    if debug:
+        pi.visualize_functions(base.fractions, points=1e3)
+        pi.visualize_functions(base.derive(1).fractions, points=1e3)
+        pi.visualize_functions(base.derive(2).fractions, points=1e3)
+
+    return base, eig_values
 
 
 def calc_flat_base(eig_values, pseudo_domain, debug=False):
@@ -142,19 +146,20 @@ def calc_flat_base(eig_values, pseudo_domain, debug=False):
         Returns:
 
         """
-        exp_derivative = exp_func.diff(s, multiplicity - 1,
-                                       z, derivative_order)
+        exp_main = exp_func * z**(multiplicity - 1)
+        exp_derivative = exp_main.diff(z, derivative_order)
         exp_s = exp_derivative.subs(s, eigenvalue)
         return sp.lambdify(z, exp_s, modules="numpy")
 
     fracs = []
-    for sk in eig_values:
-        multiplicity = 1
+    multiplicity = 1
+    for idx, sk in enumerate(eig_values):
+        if multiplicity == 2:
+            multiplicity = 1
+            continue
 
-        # TODO remove hardcoded check and better look into roots of char_ds
-        # if sk in eig_values_ds:
-        # if np.isclose(sk, 0):
-        #     multiplicity += 1
+        if idx < len(eig_values) - 1 and eig_values[idx + 1] == sk:
+            multiplicity += 1
 
         for m in range(1, multiplicity + 1):
             frac = pi.Function(domain=pseudo_domain.bounds,
@@ -169,74 +174,110 @@ def calc_flat_base(eig_values, pseudo_domain, debug=False):
                                                     derivative_order=2)])
             fracs.append(frac)
 
+    base = pi.Base(fracs)
+
     if debug:
-        pi.visualize_functions(fracs, points=1e3)
+        pi.visualize_functions(base.fractions, points=1e3)
+        pi.visualize_functions(base.derive(1).fractions, points=1e3)
+        pi.visualize_functions(base.derive(2).fractions, points=1e3)
 
-    return pi.Base(fracs)
+    return base
 
 
-class SWMStateVector(pi.ComposedFunctionVector):
+class ExponentialStateBase(pi.Base):
     """
-    vector that represents the state of the string with mass,
-    containing (x'(z, t), x.(z, t), x(0, t), x.(0, t)) at t=0
+    Base that represents the state of the string with mass,
+    containing (x'(z, t), x.(z, t), x(0, t), x.(0, t)) at t=0.
+
+    Args:
+        origin_label(str): Label of the bases that should be used to build the
+            state representation.
+        eigenvalues(list): Eigenvalues for the fractions of the given base.
+        zero_padding(bool): Constitute this base by using a base, already
+            available in first temporal order.
     """
 
-    def __init__(self, functions, scalars, origin_label):
-        if len(functions) != 2 or len(scalars) != 2:
-            raise TypeError("wrong dimensions!")
+    def __init__(self, origin_label, eigenvalues=None, zero_padding=False):
 
-        super().__init__(functions, scalars)
+        self._padded = zero_padding
+        if not zero_padding and eigenvalues is None:
+            raise ValueError("Either zero-padding or eigenvalues must be given")
+
         self.orig_lbl = origin_label
+        orig_base = pi.get_base(origin_label)
+        orig_fractions = orig_base.fractions
+        orig_fractions_dz = orig_base.derive(1).fractions
 
-    @property
-    def funcs(self):
-        return self.members["funcs"]
+        zero_func = pi.Function.from_constant(0, nonzero=(0, 0))
 
-    @property
-    def scalars(self):
-        return self.members["scalars"]
-
-    def transformation_hint(self, info, target):
-        """
-        returns ready to use handle for weight transformation from pure Function
-        Base, otherwise super method is returned.
-        """
-        if target is False:
-            raise NotImplementedError
-
-        if target and isinstance(info.src_base[0], pi.Function):
-            if info.dst_order > info.src_order - 1:
-                return None, None
-
-            if info.src_lbl == self.orig_lbl:
-                return self._transform_from_functions_factory(info), None
+        fractions = []
+        for idx, (func, func_dz) in enumerate(zip(orig_fractions,
+                                                  orig_fractions_dz)):
+            if zero_padding:
+                fractions.append(
+                    pi.ComposedFunctionVector(functions=(func_dz, zero_func),
+                                              scalars=(func(0), 0)))
+                fractions.append(
+                    pi.ComposedFunctionVector(functions=(zero_func, func),
+                                              scalars=(0, func(0))))
             else:
-                # create transform from someone who knows how to convert
-                name = info.src_lbl + "_state"
+                if idx < len(eigenvalues) - 1 and \
+                        eigenvalues[idx + 1] == eigenvalues[idx]:
+                    func_dz.nonzero = [(0, 0)]
 
-                # from current src to assistant system
-                assistant_info = copy(info)
-                assistant_info.dst_lbl = name
-                assistant_info.dst_base = pi.get_base(name)
-                assistant_info.dst_order = info.dst_order
+                fractions.append(pi.ComposedFunctionVector(
+                    functions=(func_dz, func.scale(eigenvalues[idx])),
+                    scalars=(func(0), eigenvalues[idx] * func(0)))
+                )
 
-                # from assistant system to dst
-                target_info = copy(info)
-                target_info.src_lbl = name
-                target_info.src_base = pi.get_base(name)
-                target_info.src_order = info.dst_order
+        super().__init__(fractions)
 
-                super_handle, super_hint = super().transformation_hint(
-                    target_info, True)
-                return super_handle, assistant_info
+    def transformation_hint(self, info):
+        """
+        Return ready to use handle for weight transformation from pure Function
+        Base, otherwise super method.
+        """
+        # try super class
+        handle, extra_info = super().transformation_hint(info)
+        if handle is not None:
+            return handle, extra_info
 
-        # fallback method of super class
-        return super().transformation_hint(info, target)
+        if info.src_lbl == self.orig_lbl:
+            if self._padded:
+                if info.src_order > info.dst_order:
+                    # only a reordering of the weights is necessary
+                    return self._transform_simple_base_factory(info), None
+            else:
+                return lambda w: w, None
+
+        # create transform from current src to the origin of this class and
+        # provide a transformation from that to this base.
+
+        intermediate_lbl = info.src_lbl + "_state"
+        intermediate_base = ExponentialStateBase(info.src_lbl,
+                                                 zero_padding=True)
+        pi.register_base(intermediate_lbl, intermediate_base)
+
+        # from current src to assistant system
+        assistant_info = copy(info)
+        assistant_info.dst_lbl = intermediate_lbl
+        assistant_info.dst_base = intermediate_base
+        assistant_info.dst_order = info.dst_order
+
+        # from assistant system to dst
+        target_info = copy(info)
+        target_info.src_lbl = assistant_info.dst_lbl
+        target_info.src_base = assistant_info.dst_base
+        target_info.src_order = info.dst_order
+
+        super_handle, super_hint = self.transformation_hint(target_info)
+        return super_handle, assistant_info
 
     @staticmethod
-    def _transform_from_functions_factory(info):
+    def _transform_simple_base_factory(info):
         """
-        calculates transformation that converts weights from src to dst basis
+        Calculate transformation that converts weights from src to dst basis
+        by reordering them.
         """
         src_dim = info.src_base.fractions.size
         dst_dim = info.dst_base.fractions.size
@@ -251,7 +292,7 @@ class SWMStateVector(pi.ComposedFunctionVector):
         core = np.zeros((dst_dim, 2 * src_dim))
         for i in range(src_dim):
             core[2 * i, i] = 1
-            core[2 * i - 1, i + src_dim] = 1
+            core[2 * i + 1, i + src_dim] = 1
 
         # fill with copies until needed order is accomplished
         for o in range(info.dst_order + 1):
@@ -262,14 +303,6 @@ class SWMStateVector(pi.ComposedFunctionVector):
             return np.dot(mat, weights)
 
         return handle
-
-    # def scale(self, factor):
-    #     return HCStateVector(np.array([func.scale(factor) for func in self.members["funcs"]]),
-    #                          np.array([scal * factor for scal in self.members["scalars"]]),
-    #                          self.orig_lbl)
-
-    def evaluation_hint(self, values):
-        return self(values)
 
 
 def create_function_vectors(label, eig_vals=None, zero_padding=False):
@@ -360,7 +393,7 @@ if __name__ == '__main__':
                            alpha=1, kappa1=1, kappa0=1)
     spat_domain = pi.Domain(bounds=(0, 1), num=50)
 
-    exp_base, eig_vals = calc_exp_base(params, 10, spat_domain, debug=False)
+    exp_base, eig_vals = calc_exp_base(params, 10, spat_domain, debug=True)
     pi.register_base("exp_base", exp_base)
 
     pseudo_domain = pi.Domain(bounds=(-params.tau, params.tau), num=50)

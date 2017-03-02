@@ -525,6 +525,14 @@ class ComposedFunctionVector(BaseFraction):
         return self.__class__(np.array([func.scale(factor) for func in self.members["funcs"]]),
                               np.array([scal * factor for scal in self.members["scalars"]]))
 
+    def __call__(self, argument):
+        return np.array(([func(argument) for func in self.members["funcs"]]
+                         + [[scal]*len(argument) for scal in self.members["scalars"]])
+                        ).T
+
+    def evaluation_hint(self, values):
+        return self(values)
+
 
 class Base:
     """
@@ -539,10 +547,15 @@ class Base:
     def __init__(self, fractions):
         # TODO check if Fractions are consistent in Type and provided hints
         self.fractions = sanitize_input(fractions, BaseFraction)
+        if not all([frac.scalar_product_hint() == self.fractions[0].scalar_product_hint()
+                    for frac in self.fractions]):
+            raise TypeError("Provided fractions have to be of same type.")
 
     @staticmethod
     def _transformation_factory(info):
-        mat = calculate_expanded_base_transformation_matrix(info.src_base, info.dst_base, info.src_order,
+        mat = calculate_expanded_base_transformation_matrix(info.src_base,
+                                                            info.dst_base,
+                                                            info.src_order,
                                                             info.dst_order)
 
         def handle(weights):
@@ -552,31 +565,34 @@ class Base:
 
     def transformation_hint(self, info):
         """
-        Method that provides a information about how to transform weights from one :py:class:`BaseFraction` into
-        another.
+        Method that provides a information about how to transform weights from
+        one :py:class:`Base` into another.
 
-        In Detail this function has to return a callable, which will take the weights of the source- and return the
-        weights of the target system. It may have keyword arguments for other data which is required to perform the
-        transformation.
-        Information about these extra keyword arguments should be provided in form of a dictionary whose keys are
-        keyword arguments of the returned transformation handle.
+        In Detail this function has to return a callable, which will take the
+        weights of the source- and return the weights of the target base.
+        It may accept keyword arguments for other data which is required to
+        perform the transformation.
+        Information about these extra keyword arguments should be provided in
+        form of a dictionary whose keys constitute the keyword arguments of the
+        returned transformation handle.
 
         Note:
-            This implementation covers the most basic case, where the two :py:class:`BaseFraction` s are of same type.
-            For any other case it will raise an exception.
-            Overwrite this Method in your implementation to support conversion between bases that differ from yours.
+            This implementation covers the most basic case, where the two
+            :py:class:`Base` s of same type are to be transformed.
+            Overwrite this Method in your implementation to support conversion
+            between bases that differ from the reference implementation.
 
         Args:
-            info: :py:class:`TransformationInfo`
-
-        Raises:
-            NotImplementedError:
+            info(:py:class:`TransformationInfo`): Transformation properties.
 
         Returns:
-            Transformation handle
+            tuple: Transformation handle and keyword dict
         """
         if info.src_base.__class__ == info.dst_base.__class__:
-            return self._transformation_factory(info), None
+            if (info.src_base.fractions[0].__class__
+                    == info.src_base.fractions[0].__class__):
+                # easy one
+                return self._transformation_factory(info), None
         else:
             # No Idea what to do.
             return None, None
@@ -633,8 +649,11 @@ class Base:
 
 class StackedBase(Base):
     """
-    Implementation of a basis vector that is obtained by stacking different bases onto each other.
-        This typically occurs when the bases of coupled systems are joined to create a unified system.
+    Implementation of a basis vector that is obtained by stacking different
+    bases onto each other.
+    This typically occurs when the bases of coupled systems are joined to
+    create a unified system or the system state is approximated by composed
+    elements.
 
     Args:
         fractions (dict): Dictionary with base_label and corresponding function
@@ -655,24 +674,29 @@ class StackedBase(Base):
 
     def transformation_hint(self, info):
         """
-        If *info.src_lbl* is a member, just return it, using to correct derivative transformation, otherwise
-        return `None`
+        If *info.dst_lbl* is a member, just return it, using to correct
+        derivative transformation, otherwise return `None`
 
         Args:
-            info (:py:class:`TransformationInfo`): Information about the requested transformation.
+            info (:py:class:`TransformationInfo`): Information about the
+                requested transformation.
         Return:
             transformation handle
 
         """
         # we only know how to get from a stacked base to one of our parts
-        if info.src_base.__class__ != self.__class__ or info.dst_lbl not in self._info.keys():
+        if (info.src_base.__class__ != self.__class__
+                or info.dst_lbl not in self._info.keys()):
             return None, None
 
         # we can help
         start_idx = self._info[info.dst_lbl]["start"]
         sel_len = self._info[info.dst_lbl]["size"]
-        trans_mat = calculate_expanded_base_transformation_matrix(info.dst_base, info.dst_base,
-                                                                  info.src_order, info.dst_order,
+        # TODO wrong order is passed here!
+        trans_mat = calculate_expanded_base_transformation_matrix(info.dst_base,
+                                                                  info.dst_base,
+                                                                  info.src_order,
+                                                                  info.dst_order,
                                                                   use_eye=True)
 
         def selection_func(weights):
@@ -788,7 +812,7 @@ def _dot_product_l2(first, second):
     def function(z):
         """
         Take the complex conjugate of the first element and multiply it
-        by the second.
+        with the second.
         """
         return np.conj(first(z)) * second(z)
 
@@ -923,8 +947,8 @@ def calculate_scalar_product_matrix(scalar_product_handle, base_a, base_b,
     Return:
         numpy.ndarray: matrix :math:`A`
     """
-    fractions_a = base_a.fractions
-    fracstion_b = base_b.fractions
+    fractions_a = base_a
+    fracstion_b = base_b
 
     if optimize:
         raise NotImplementedError("this approach leads to wrong results atm.")
@@ -1020,11 +1044,13 @@ def project_on_base(function, base):
 
     # compute <x(z, t), phi_i(z)> (vector)
     projections = calculate_scalar_product_matrix(dot_product_l2,
-                                                  Base(function),
-                                                  base).squeeze()
+                                                  np.atleast_1d(function),
+                                                  base.fractions).squeeze()
 
     # compute <phi_i(z), phi_j(z)> for 0 < i, j < n (matrix)
-    scale_mat = calculate_scalar_product_matrix(dot_product_l2, base, base)
+    scale_mat = calculate_scalar_product_matrix(dot_product_l2,
+                                                base.fractions,
+                                                base.fractions)
 
     return np.dot(np.linalg.inv(scale_mat), projections)
 
@@ -1161,7 +1187,7 @@ def get_weight_transformation(info):
     Return:
         callable: transformation function handle
     """
-    # TODO since this lives in core now, get rid ob base labels
+    # TODO since this lives in core now, get rid of base labels
     # trivial case
     if info.src_lbl == info.dst_lbl:
         mat = calculate_expanded_base_transformation_matrix(
@@ -1176,15 +1202,16 @@ def get_weight_transformation(info):
 
     # try to get help from the destination base
     handle, hint = info.dst_base.transformation_hint(info)
+
     if handle is None:
         # try source instead
         handle, hint = info.src_base.transformation_hint(info)
 
     if handle is None:
         raise TypeError(("get_weight_transformation():, \n"
-                         + "You requested information about how to transform to '{1}'({2}) from '{4}'({5}), \n"
-                         + "furthermore the source derivative order is {3} and the target one is {6}. \n"
-                         + "No transformation could be found, remember to implement your own 'transformation_hint'"
+                         + "You requested information about how to transform to '{0}'({1}) from '{3}'({4}), \n"
+                         + "furthermore the source derivative order is {2} and the target one is {5}. \n"
+                         + "No transformation could be found, remember to implement your own 'transformation_hint' "
                          + "method for non-standard bases.").format(
             info.dst_lbl,
             info.dst_base.__class__.__name__,
@@ -1294,10 +1321,10 @@ def calculate_base_transformation_matrix(src_base, dst_base):
     p_matrices = []
     q_matrices = []
     for idx, (s_hint, d_hint) in enumerate(zip(s_hints, d_hints)):
-        dst_members = Base([dst_frac.get_member(idx)
-                            for dst_frac in dst_base.fractions])
-        src_members = Base([src_frac.get_member(idx)
-                            for src_frac in src_base.fractions])
+        dst_members = np.array([dst_frac.get_member(idx)
+                                for dst_frac in dst_base.fractions])
+        src_members = np.array([src_frac.get_member(idx)
+                                for src_frac in src_base.fractions])
 
         # compute P_n matrix:
         # <phi_tilde_ni(z), phi_dash_nj(z)> for 0 < i < N, 0 < j < M

@@ -63,7 +63,9 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
 
     # clear numeric jitter
     roots = 1j*np.imag(roots)[:order]
-    eig_values = np.hstack([-1*roots[::-1], roots])
+
+    # eig_values = roots
+    eig_values = np.hstack([-1*roots[::-1][:-1], roots])
 
     if debug:
         grid = [np.linspace(-1, 1), np.linspace(0, 100)]
@@ -81,7 +83,8 @@ def calc_exp_base(parameter, order, spat_domain, debug=False):
         Returns:
 
         """
-        w0_main = w0 * z**(multiplicity - 1)
+        w0_main = w0 * (1-z)**(multiplicity - 1)
+        # w0_main = w0
         w0_derivative = w0_main.diff(z, derivative_order)
         w0_s = w0_derivative.subs(s, eigenvalue)
         return sp.lambdify(z, sp.re(w0_s), modules="numpy")
@@ -374,13 +377,13 @@ def calc_controller(exp_base_lbl, flat_base_lbl, parameter):
 
     p = parameter
     terms = [
-        pi.ScalarTerm(y_ddz(0), scale=0),
-        # pi.ScalarTerm(y_ddz(-p.tau), scale=(1-p.alpha)),
-        # pi.ScalarTerm(y_dz(p.tau), scale=(p.sigma * p.tau / 2 - p.kappa1)),
-        # pi.ScalarTerm(y_dz(-p.tau),
-        #               scale=(p.alpha * p.kappa1 - p.sigma * p.tau / 2)),
-        # pi.ScalarTerm(y(p.tau), scale=(-p.kappa0)),
-        # pi.ScalarTerm(y(-p.tau), scale=(p.alpha * p.kappa0)),
+        # pi.ScalarTerm(y_ddz(0), scale=0),
+        pi.ScalarTerm(y_ddz(-p.tau), scale=(1-p.alpha)),
+        pi.ScalarTerm(y_dz(p.tau), scale=(p.sigma * p.tau / 2 - p.kappa1)),
+        pi.ScalarTerm(y_dz(-p.tau),
+                      scale=(p.alpha * p.kappa1 - p.sigma * p.tau / 2)),
+        pi.ScalarTerm(y(p.tau), scale=(-p.kappa0)),
+        pi.ScalarTerm(y(-p.tau), scale=(p.alpha * p.kappa0)),
     ]
 
     law = pi.WeakFormulation(terms, name="flat_law")

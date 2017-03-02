@@ -14,7 +14,7 @@ if __name__ == '__main__':
 
     # settings
     fem_order = 20
-    exp_order = 2
+    exp_order = 3
 
     params = pi.Parameters(sigma=1, tau=.5, m=1,
                            alpha=1, kappa1=1, kappa0=1)
@@ -38,23 +38,26 @@ if __name__ == '__main__':
     # sim_state = create_function_vectors("sim_base", zero_padding=True)
     # pi.register_base("sim_base_state", sim_state)
 
-    exp_base, eig_vals = calc_exp_base(params, exp_order, spat_domain, debug=False)
+    exp_base, eig_vals = calc_exp_base(params, exp_order, spat_domain, debug=True)
     pi.register_base("exp_base", exp_base)
+    # quit()
 
     exp_state = ExponentialStateBase("exp_base", eig_vals)
     pi.register_base("exp_base_state", exp_state)
 
     exp_state_dz = pi.Base([frac.get_member(0) for frac in exp_state.fractions])
     pi.register_base("e_dz", exp_state_dz)
-    pi.visualize_functions(exp_state_dz.fractions)
+    # pi.visualize_functions(exp_state_dz.fractions)
+
     exp_state_dt = pi.Base([frac.get_member(1) for frac in exp_state.fractions])
     pi.register_base("e_dt", exp_state_dt)
-    pi.visualize_functions(exp_state_dt.fractions)
+    # pi.visualize_functions(exp_state_dt.fractions)
 
     pseudo_domain = pi.Domain(bounds=(-params.tau, params.tau), num=50)
     flat_base = calc_flat_base(eig_vals, pseudo_domain, debug=False)
     pi.register_base("flat_base", flat_base)
 
+    # cont = calc_controller("exp_base", "flat_base", params)
     cont = calc_controller("exp_base_state", "flat_base", params)
     # cont = calc_controller("exp_base_state", "flat_base", params)
 
@@ -78,25 +81,31 @@ if __name__ == '__main__':
     exp_weights = cont.get_results(data[0].input_data[0],
                                    result_key="exp_base_state"
                                    )
-    exp_data = pi.process_sim_data("e_dt",
+    exp_data = pi.process_sim_data("exp_base",
                                    exp_weights,
                                    pi.Domain(points=data[0].input_data[0]),
-                                   spat_domain, 0, 0,
+                                   spat_domain, 0, 1,
                                    name="exp_approx")
+    exp_data_dt = pi.process_sim_data("e_dt",
+                                      exp_weights,
+                                      pi.Domain(points=data[0].input_data[0]),
+                                      spat_domain, 0, 0,
+                                      name="e_dt")
     flat_data = pi.process_sim_data("flat_base",
                                     exp_weights,
                                     pi.Domain(points=data[0].input_data[0]),
                                     pseudo_domain, 0, 2,
                                     name="flat_approx")
-    for _data in exp_data:
-        _data.output_data = np.real(_data.output_data)
+    # for _data in exp_data:
+    #     _data.output_data = np.real(_data.output_data)
 
     for _data in flat_data:
         _data.output_data = np.real(_data.output_data)
 
     plot = pi.PgAnimatedPlot((data
                               + exp_data
-                              # + flat_data
+                              + exp_data_dt
+                              + flat_data
                               ), replay_gain=1)
 
     pg.QAPP.exec_()

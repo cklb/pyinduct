@@ -13,4 +13,4 @@ class FlatFeedForward(pi.SimulationInput):
         f = + self._params.kappa0 * (y_p[0] + self._params.alpha * y_m[0]) \
             + self._params.kappa1 * (y_p[1] + self._params.alpha * y_m[1]) \
             + y_p[2] + self._params.alpha * y_m[2]
-        return dict(output=0*self._params.m / 2 * f)
+        return dict(output=1*self._params.m / 2 * f)

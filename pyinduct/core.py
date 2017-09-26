@@ -144,7 +144,7 @@ class Function(BaseFraction):
     For the implementation of new shape functions subclass this implementation
     or directly provide a callable *eval_handle* and callable
     *derivative_handles* if spatial derivatives are required for the
-    application. 
+    application.
     """
 
     # TODO: overload add and mul operators
@@ -582,7 +582,7 @@ class Base:
         """
         Hint that returns steps for scalar product calculation with elements of
         this base.
-        
+
         Note:
             Overwrite to implement custom functionality.
             For an example implementation see :py:class:`.Function`
@@ -1651,8 +1651,14 @@ class Domain(object):
             self._values = np.atleast_1d(points)
             self._limits = (points.min(), points.max())
             self._num = points.size
-            # TODO check for evenly spaced entries
-            # for now just use provided information
+
+            # check for evenly spaced entries
+            steps = np.diff(points)
+            equal_steps = np.allclose(steps, steps[0])
+            if step and not equal_steps:
+                raise ValueError("Step size given for unequal steps in provided data.")
+            if step is None and equal_steps:
+                step = steps[0]
             self._step = step
         elif bounds and num:
             self._limits = bounds

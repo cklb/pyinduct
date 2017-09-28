@@ -1685,6 +1685,10 @@ class Domain(object):
         else:
             raise ValueError("not enough arguments provided!")
 
+        # mimic some ndarray properties
+        self.shape = self._values.shape
+        self.view = self._values.view
+
     def __len__(self):
         return len(self._values)
 

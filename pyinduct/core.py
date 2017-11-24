@@ -1858,8 +1858,8 @@ class EvalData:
         if fill_axes:
             # add dummy axes to input_data for missing output dimensions
             for dim in range(output_data.ndim - len(input_data)):
-                input_data.append(np.array(
-                    range(output_data.shape[dim + len(input_data)])))
+                input_data.append(Domain(points=np.array(
+                    range(output_data.shape[dim + len(input_data)]))))
                 input_labels.append("")
                 input_units.append("")
 

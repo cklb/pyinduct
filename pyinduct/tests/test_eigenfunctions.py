@@ -4,11 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyinduct as pi
 import pyinduct.parabolic as parabolic
-from tests import show_plots
-
-if show_plots:
-    import pyqtgraph as pg
-    pg.mkQApp()
+from pyinduct.tests import show_plots
 
 
 class TestAddMulFunction(unittest.TestCase):
@@ -363,103 +359,164 @@ class TestEigenvalues(unittest.TestCase):
             self.assertTrue(all(np.isclose(eig_freq, desired_eig_freq)))
 
 
-class TestSecondOrderRobinEigenvalueProblemFunctions(unittest.TestCase):
+class TestSecondOrderEigenvalueProblemFunctions(unittest.TestCase):
     def setUp(self):
         self.param = [2, 1.5, -3, -5, -.5]
-        a2, a1, a0, alpha, beta = self.param
-        l = 1
-        limits = (0, l)
-
-        self.spatial_domain = pi.Domain(limits, num=100)
+        self.spatial_domain = pi.Domain((0, 1), num=100)
         self.z = self.spatial_domain.points
         self.n = 10
 
+    def evp_eq(self, a2, a1, a0, boundary_check):
+        for eig_v, eig_f in zip(self.eig_val, self.eig_funcs):
+            np.testing.assert_array_almost_equal(
+                (a2 * eig_f.derive(2)(self.z)
+                 + a1 * eig_f.derive(1)(self.z)
+                 + a0 * eig_f(self.z)) / eig_v,
+                 eig_v.real * eig_f(self.z) / eig_v,
+            decimal=4)
+            boundary_check(eig_v, eig_f, self.z[-1])
+
+
+    @unittest.skip("not implemented")
+    def test_dirichlet_robin_constant_coefficient(self):
+
+        def boundary_check(eig_v, eig_f, l):
+            np.testing.assert_array_almost_equal(eig_f(0) / eig_v, 0)
+            np.testing.assert_array_almost_equal(eig_f.derive(1)(l) / eig_v,
+                                                 -beta * eig_f(l) / eig_v)
+
+        a2, a1, a0, _, beta = self.param
+        param = [a2, a1, a0, None, beta]
+
+        eig_freq, self.eig_val \
+            = pi.SecondOrderDiriRobEigenfunction.eigfreq_eigval_hint(
+            param, self.z[-1], self.n, show_plot=True)
+
+        _, self.eig_funcs = pi.SecondOrderDiriRobEigenfunction.solve_evp_hint(
+            param, self.z[-1], eig_freq=eig_freq)
+
+        [plt.plot(self.z, func(self.z)) for func in self.eig_funcs]
+        plt.show()
+
+        self.evp_eq(a2, a1, a0, boundary_check)
+
+        self.spatially_varying_coefficient(boundary_check)
+
+
+    @unittest.skip("not implemented")
+    def test_robin_dirichlet_constant_coefficient(self):
+
+        def boundary_check(eig_v, eig_f, l):
+            np.testing.assert_array_almost_equal(eig_f.derive(1)(0) / eig_v,
+                                                 alpha * eig_f(0) / eig_v)
+            np.testing.assert_array_almost_equal(eig_f(l) / eig_v, 0)
+
+        a2, a1, a0, alpha, _ = self.param
+        param = [a2, a1, a0, alpha, None]
+
+        eig_freq, self.eig_val \
+            = pi.SecondOrderRobDiriEigenfunction.eigfreq_eigval_hint(
+            param, self.z[-1], self.n, show_plot=True)
+
+        _, self.eig_funcs = pi.SecondOrderRobDiriEigenfunction.solve_evp_hint(
+            param, self.z[-1], eig_freq=eig_freq)
+
+        [plt.plot(self.z, func(self.z)) for func in self.eig_funcs]
+        plt.show()
+
+        self.evp_eq(a2, a1, a0, boundary_check)
+
+        self.spatially_varying_coefficient(boundary_check)
+
+
+    def test_dirichlet_constant_coefficient(self):
+
+        def boundary_check(eig_v, eig_f, l):
+            np.testing.assert_array_almost_equal(eig_f(0) / eig_v, 0)
+            np.testing.assert_array_almost_equal(eig_f(l) / eig_v, 0)
+
+        a2, a1, a0, _, _ = self.param
+        param = [a2, a1, a0, None, None]
+        z = self.spatial_domain.points
+
+        eig_freq, self.eig_val \
+            = pi.SecondOrderDirichletEigenfunction.eigfreq_eigval_hint(
+            param, self.z[-1], self.n)
+
+        _, self.eig_funcs = pi.SecondOrderDirichletEigenfunction.solve_evp_hint(
+            param, self.z[-1], eig_freq=eig_freq)
+
+        self.evp_eq(a2, a1, a0, boundary_check)
+
+        self.spatially_varying_coefficient(boundary_check)
+
+
+    def test_robin_constant_coefficient(self):
+
+        def boundary_check(eig_v, eig_f, l):
+            np.testing.assert_array_almost_equal(eig_f.derive(1)(0) / eig_v,
+                                                 alpha * eig_f(0) / eig_v)
+            np.testing.assert_array_almost_equal(eig_f.derive(1)(l) / eig_v,
+                                                 - beta * eig_f(l) / eig_v)
+
+        a2, a1, a0, alpha, beta = self.param
+
         eig_freq, self.eig_val \
             = pi.SecondOrderRobinEigenfunction.eigfreq_eigval_hint(
-                self.param,
-                l,
-                self.n,
-                show_plot=show_plots)
+            self.param,
+            self.z[-1],
+            self.n,
+            show_plot=show_plots)
 
         self.eig_funcs = np.array([pi.SecondOrderRobinEigenfunction(om,
                                                                     self.param,
-                                                                    l)
+                                                                    self.z[-1])
                                    for om in eig_freq])
 
-        self.a2_z = pi.Function.from_constant(a2)
-        self.a1_z = pi.Function.from_constant(a1)
-        self.a0_z = pi.Function.from_constant(a0)
+        self.evp_eq(a2, a1, a0, boundary_check)
 
-        self.alpha = alpha
-        self.beta = beta
-
-        self.transformed_eig_funcs = [pi.TransformedSecondOrderEigenfunction(
-            self.eig_val[i],
-            [self.eig_funcs[i](0), self.eig_funcs[i].derive(1)(0), 0, 0],
-            [self.a2_z, self.a1_z, self.a0_z],
-            self.spatial_domain)
-                                      for i in range(len(self.eig_funcs))]
-
-    def test_constant_coefficient(self):
-        """
-        Transform an operator whose coefficients do not vary spatially
-        """
-        a2, a1, a0, alpha, beta = self.param
-        z = self.spatial_domain.points
-
-        if show_plots:
-            plt.figure()
-
-        for i in range(len(self.eig_funcs)):
-            eig_v = self.eig_val[i]
-            eig_f = self.eig_funcs[i]
-
-            if show_plots:
-                plt.plot(z, eig_f.derive(1)(z))
-
-            # check transient behaviour
-            self.assertTrue(np.allclose(a2 * eig_f.derive(2)(z)
-                                        + a1 * eig_f.derive(1)(z)
-                                        + a0 * eig_f(z),
-                                        eig_v.real * eig_f(z)))
-
-            # check boundaries
-            self.assertTrue(np.isclose(eig_f.derive(1)(z[0]),
-                                       self.alpha * eig_f(z[0])))
-            self.assertTrue(np.isclose(eig_f.derive(1)(z[-1]),
-                                       - self.beta * eig_f(z[-1])))
+        self.spatially_varying_coefficient(boundary_check)
 
         if show_plots:
             plt.show()
 
-    def test_spatially_varying_coefficient(self):
-        """
-        Transform an operator whose coefficients do vary spatially
-        """
+    def spatially_varying_coefficient(self, boundary_check):
+        a2, a1, a0, _, _ = self.param
+        a2_z = pi.Function.from_constant(a2)
+        a1_z = pi.Function.from_constant(a1)
+        a0_z = pi.Function.from_constant(a0)
+
+        transformed_eig_funcs = [pi.TransformedSecondOrderEigenfunction(
+            self.eig_val[i],
+            [self.eig_funcs[i](0), self.eig_funcs[i].derive(1)(0), 0, 0],
+            [a2_z, a1_z, a0_z],
+            self.spatial_domain)
+                                      for i in range(len(self.eig_funcs))]
         # TODO: provide second derivative of transformed eigenfunctions
         for i in range(len(self.eig_funcs)):
-            eig_f = self.transformed_eig_funcs[i]
+            eig_f = transformed_eig_funcs[i]
             eig_v = self.eig_val[i]
 
             # interval
-            self.assertTrue(np.allclose(
-                self.a2_z(self.z) * self.eig_funcs[i].derive(2)(self.z)
-                + self.a1_z(self.z) * eig_f.derive(1)(self.z)
-                + self.a0_z(self.z) * eig_f(self.z),
-                eig_v.real * eig_f(self.z),
-                rtol=1e-3))
+            np.testing.assert_array_almost_equal(
+                a2_z(self.spatial_domain) * self.eig_funcs[i].derive(2)(self.spatial_domain)
+                + a1_z(self.spatial_domain) * eig_f.derive(1)(self.spatial_domain)
+                + a0_z(self.spatial_domain) * eig_f(self.spatial_domain),
+                eig_v.real * eig_f(self.spatial_domain),
+                decimal=2)
 
-            # boundaries
-            self.assertTrue(np.isclose(eig_f.derive(1)(self.z[0]),
-                                       self.alpha * eig_f(self.z[0]),
-                                       atol=1e-4))
-            self.assertTrue(np.isclose(eig_f.derive(1)(self.z[-1]),
-                                       -self.beta * eig_f(self.z[-1]),
-                                       atol=1e-4))
+            boundary_check(eig_v, eig_f, self.spatial_domain[-1])
 
 
 class IntermediateTransformationTest(unittest.TestCase):
     def test_it(self):
+
+        # system/simulation parameters
+        self.l = 1
+        self.spatial_domain = (0, self.l)
+        self.spatial_disc = 30
+        self.n = 10
+
         # original system parameters
         a2 = 1.5
         a1 = 2.5
@@ -478,16 +535,12 @@ class IntermediateTransformationTest(unittest.TestCase):
         self.param_t = [a2, a1_t, a0_t, alpha_t, beta_t]
 
         # original intermediate ("_i") and target intermediate ("_ti") system parameters
-        _, _, a0_i, self.alpha_i, self.beta_i = parabolic.general.eliminate_advection_term(self.param)
+        _, _, a0_i, self.alpha_i, self.beta_i =\
+            parabolic.general.eliminate_advection_term(self.param, self.l)
         self.param_i = a2, 0, a0_i, self.alpha_i, self.beta_i
-        _, _, a0_ti, self.alpha_ti, self.beta_ti = parabolic.general.eliminate_advection_term(self.param_t)
+        _, _, a0_ti, self.alpha_ti, self.beta_ti =\
+            parabolic.general.eliminate_advection_term(self.param_t, self.l)
         self.param_ti = a2, 0, a0_ti, self.alpha_ti, self.beta_ti
-
-        # system/simulation parameters
-        self.l = 1
-        self.spatial_domain = (0, self.l)
-        self.spatial_disc = 30
-        self.n = 10
 
         # create (not normalized) eigenfunctions
         self.eig_freq, self.eig_val = \

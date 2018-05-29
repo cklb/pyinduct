@@ -927,6 +927,7 @@ class SymbolicTerm(EquationTerm):
         info["is_one"] = self.term == sp.Float(1)
         info["free_symbols"] = expr.free_symbols
         info["undef_funcs"] = expr.atoms(AppliedUndef)
+        # under which circumstances will a derivative be sorted out?
         info["derivatives"] = {der for der in expr.atoms(Derivative)
                                if der.atoms(AppliedUndef).pop()
                                in info["undef_funcs"]}

@@ -3,6 +3,8 @@ import pyinduct.sym_simulation as ss
 import sympy as sp
 # from sympy.physics.quantum.innerproduct import InnerProduct
 
+import matplotlib.pyplot as plt
+
 # approximation order
 N = 10
 
@@ -62,5 +64,18 @@ g_exp = 1/(rho[1]*L)*(
 # sp.pprint(g_exp)
 equations.append(g_exp)
 
-# define approximations
+# approximations
+jac = sp.jacobi(5, 1, 1, z)
+sp.plot(jac)
 
+
+
+# define base
+diri_boundary = z- 1
+base = ss.create_orthogonal_base(sp.polys.orthopolys.legendre_poly,
+                                 N,
+                                 z
+                                 (0, 1),
+                                 diri_boundary)
+sp.pprint(base[1])
+sp.plot(base[1], (z, 0, 1))

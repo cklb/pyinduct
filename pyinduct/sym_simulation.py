@@ -3,6 +3,7 @@ New simulation module approach that makes use of sympy for expression handling
 """
 
 import sympy as sp
+from sympy.functions.special.polynomials import jacobi
 import numpy as np
 
 time = sp.symbols("t")
@@ -46,3 +47,30 @@ class InnerProduct(sp.Expr):
 
     def doit(self, **hints):
         pass
+
+
+def create_approximation(cls,
+                           order,
+                           symbol,
+                           domain,
+                           ess_boundary=None,
+                           nat_boundary=None):
+    """
+    Create an approximation basis.
+
+
+
+    Args:
+        order:
+        domain:
+        ess_boundary:
+        nat_boundary:
+
+    Returns:
+
+    """
+    # if cls not in ortho_bases:
+    #     raise ValueError("Unknown generator")
+
+    base = [cls(n, x=symbol, polys=True) for n in range(order)]
+    return base

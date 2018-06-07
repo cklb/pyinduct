@@ -15,14 +15,28 @@ space = sp.symbols("z:3", real=True)
 _symbol_cnt = 0
 
 
-def get_weights(n):
+def get_weights(n, letter="c"):
     cnt = getattr(get_weights, "_cnt", 0)
     if n < 0:
         raise ValueError
-    c = [sp.symbols("c{}".format(cnt + i), real=True, cls=sp.Function)(time)
+    c = [sp.symbols("{}{}".format(letter, cnt + i),
+                    real=True,
+                    cls=sp.Function)(time)
          for i in range(n)]
     setattr(get_weights, "_cnt", cnt + n)
     return c
+
+
+def get_derivative(n, letter="d"):
+    cnt = getattr(get_derivative, "_cnt", 0)
+    if n < 0:
+        raise ValueError
+    d = [sp.symbols("{}{}".format(letter, cnt + i),
+                    real=True,
+                    cls=sp.Function)(time)
+         for i in range(n)]
+    setattr(get_derivative, "_cnt", cnt + n)
+    return d
 
 
 class FieldVariable(sp.Function):
@@ -41,14 +55,16 @@ class InnerProduct(sp.Expr):
 
     def __new__(cls, left, right, bounds):
         # identify free variables of arguments
-        vars = left.atoms(sp.Symbol).union(right.atoms(sp.Symbol))
+        variables = left.atoms(sp.Symbol).union(right.atoms(sp.Symbol))
 
         # extract spatial coordinates
-        vars = vars.intersection(space)
+        variables = variables.intersection(space)
 
         # construct integrals over remaining coordinates
-        exp = sp.conjugate(left) * right
-        for dim in vars:
+        # TODO .coeff seems to have problems with conjugate
+        # exp = sp.conjugate(left) * right
+        exp = left * right
+        for dim in variables:
             exp = sp.Integral(exp, (dim, bounds[0], bounds[1]))
         return exp
 
@@ -73,15 +89,15 @@ class Lagrange1stOrder(sp.Piecewise):
                                    (1, x == mid),
                                    (1 - (x-mid)/(end - mid), x < end),
                                    (0, x >= end),
-                        )
+                                   )
         return obj
 
 
 def build_lag1st(sym, start, mid, end):
     if start == mid:
         obj = sp.Piecewise((0, sym < mid),
-                           (1 - (sym - mid)/(end - mid), sym < end),
-                           (0, sym >= end)
+                           (1 - (sym - mid)/(end - mid), sym <= end),
+                           (0, sym > end)
                            )
     elif mid == end:
         obj = sp.Piecewise((0, sym < start),
@@ -90,10 +106,9 @@ def build_lag1st(sym, start, mid, end):
                            )
     else:
         obj = sp.Piecewise((0, sym < start),
-                           ((sym - start)/(mid - start), sym < mid),
-                           (1, sym == mid),
-                           (1 - (sym - mid)/(end - mid), sym < end),
-                           (0, sym >= end)
+                           ((sym - start)/(mid - start), sym <= mid),
+                           (1 - (sym - mid)/(end - mid), sym <= end),
+                           (0, sym > end)
                            )
     return obj
 

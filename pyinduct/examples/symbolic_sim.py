@@ -1,3 +1,4 @@
+import pickle
 import numpy as np
 import pyinduct as pi
 import pyinduct.sym_simulation as ss
@@ -7,7 +8,7 @@ import sympy as sp
 import matplotlib.pyplot as plt
 
 # approximation order
-N = 3
+N = 50
 spat_bounds = (0, 1)
 
 # define temporal and spatial variables
@@ -128,7 +129,7 @@ for eq in equations:
 # print(rep_eqs[0])
 # quit()
 
-# acquire targets
+# collect derivatives
 targets = set()
 for eq in rep_eqs:
     ders = eq.atoms(sp.Derivative)
@@ -143,40 +144,55 @@ if 0:
     for t in targets:
         x = sp.Derivative()
 
-# substitute first order derivatives with new symbols
-new_targets = []
+# substitute all weights with new symbols
+state_dict = dict()
+state_dt_dict = dict()
+state_derivatives = dict()
 for t in targets:
-    s = ss.get_derivative(1)[0]
-    new_targets.append(s)
-s_list = list(zip(targets, new_targets))
-print(s_list)
-t_eqs = [eq.subs(s_list) for eq in rep_eqs]
+    var = sp.Dummy()
+    state_dict[t.args[0]] = var
+    var_dt = sp.Dummy()
+    state_dt_dict[t] = var_dt
+    state_derivatives[var] = var_dt
+
+print(state_dict)
+print(state_dt_dict)
+print(state_derivatives)
+
+t_eqs = [eq.subs({**state_dict, **state_dt_dict}) for eq in rep_eqs]
 print(t_eqs)
 
-if 1:
-    mat_form = sp.linear_eq_to_matrix(t_eqs, *new_targets)
+if 0:
+    mat_form = sp.linear_eq_to_matrix(t_eqs, list(state_dt_dict.values))
     print(new_targets)
     print(mat_form)
 
-rhs = sp.solve(t_eqs, new_targets)
+rhs = sp.solve(t_eqs, list(state_dt_dict.values()))
 print(rhs)
 
-# acquire input and state variables
+# input and variables
 all_vars = set()
 for eq in rhs.values():
     sv = eq.atoms(sp.Function)
     all_vars.update(sv)
 
 all_vars = sorted(all_vars, key=lambda _x: str(_x))
-
-state_vars = list(filter(lambda var: "c" in str(var), all_vars))
 input_vars = list(filter(lambda var: "u" in str(var), all_vars))
-print(state_vars)
-print(input_vars)
-
+state_vars = sorted(state_dict.values(), key=lambda _x: str(_x))
 state = sp.Matrix(state_vars)
 inputs = sp.Matrix(input_vars)
-print(state)
-print(inputs)
+# print(state)
+# print(inputs)
 
 # build matrix expression for rhs
+rhs_list = []
+for var in state_vars:
+    rhs_list.append(rhs[state_derivatives[var]])
+
+rhs_vec = sp.Matrix(rhs_list)
+jac = rhs_vec.jacobian(state)
+
+# data = (inputs, state, rhs_vec)
+data = (str(input_vars), str(state_vars), str(rhs_list), str(jac))
+with open("symb_test_N={}.pkl".format(N), "wb") as f:
+    pickle.dump(data, f)

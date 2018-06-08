@@ -2,6 +2,7 @@
 New simulation module approach that makes use of sympy for expression handling
 """
 
+from copy import copy
 import sympy as sp
 from sympy.functions.special.polynomials import jacobi
 import numpy as np
@@ -134,25 +135,42 @@ def create_lag1ast_base(sym, bounds, num):
     return funcs
 
 
-def create_approximation(sym, funcs, ess_bounds):
+def create_approximation(sym, funcs, bounds):
     """
     Create an approximation basis.
     """
-    num = len(funcs)
-    # extract shape function that is to be eliminated
-    nat_idxs = []
-    for db in ess_bounds:
-        idx = next((idx for idx in range(num)
-                    if funcs[idx].subs(sym, db[0]) == 1))
-        nat_idxs.append(idx)
 
-    nat_funcs = [funcs[idx] for idx in range(num) if idx not in nat_idxs]
-    ess_funcs = [funcs[idx] for idx in range(num) if idx in nat_idxs]
+    ess_bcs = []
+    ess_idxs = []
+    # identify essential boundaries and their corresponding functions
+    for cond in bounds:
+        expr = cond.lhs.args[0]
+        if isinstance(expr, sp.Derivative):
+            # only dirichlet boundaries require extra work
+            continue
+
+        assert sym in cond.lhs.args[1]
+        assert len(cond.lhs.args[2]) == 1
+        pos = next(iter(cond.lhs.args[2]))
+
+        for idx, func in enumerate(funcs):
+            if func.subs(sym, pos) != 0:
+                ess_bcs.append((cond, func))
+                ess_idxs.append(idx)
+
+    assert len(ess_bcs) <= len(bounds)
+
+    # extract shape functions that are to be excluded
+    x_ess = sp.Add(*[cond.rhs * func for cond, func in ess_bcs])
+
+    # extract shape functions are to be kept
+    nat_funcs = [func for idx, func in enumerate(funcs) if idx not in ess_idxs]
 
     # define approximated system variable
-    c = get_weights(num - len(ess_bounds))
-    x_ess = [db[1] * ef for db, ef in zip(ess_bounds, ess_funcs)]
-    x_nat = [c * f for c, f in zip(c, nat_funcs)]
+    c = get_weights(len(nat_funcs))
+    x_nat = sp.Add(*[c * f for c, f in zip(c, nat_funcs)])
 
-    return sp.Add(*x_ess) + sp.Add(*x_nat)
+    x_comp = x_ess + x_nat
+
+    return x_comp, nat_funcs
 

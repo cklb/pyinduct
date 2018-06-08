@@ -1,20 +1,27 @@
 import pickle
-import numpy as np
-import pyinduct as pi
-import pyinduct.sym_simulation as ss
 import sympy as sp
 # from sympy.physics.quantum.innerproduct import InnerProduct
+from tqdm import tqdm
 
-import matplotlib.pyplot as plt
+import pyinduct.sym_simulation as ss
 
 # approximation order
-N = 50
+N = 3
+
+# spatial domain
 spat_bounds = (0, 1)
 
 # define temporal and spatial variables
 t = ss.time
 z = ss.space[0]
 # z1, z2 = ss.space[:2]
+
+# define system inputs
+input_types = ["dirichlet", "dirichlet"]
+u1 = sp.symbols("u1", cls=sp.Function)
+u1_t = u1(t)
+u2 = sp.symbols("u2", cls=sp.Function)
+u2_t = u2(t)
 
 # define symbols of spatially distributed and lumped system variables
 x1 = sp.symbols("x1", cls=sp.Function)
@@ -24,18 +31,6 @@ x2_zt = x2(z, t)
 gamma = sp.symbols("gamma", cls=sp.Function)
 gamma_t = gamma(t)
 
-# define symbols for test functions
-phi = sp.symbols("phi_(:{})".format(N-1), cls=sp.Function)
-phi_z = [p(z) for p in phi]
-print(phi)
-print(phi_z)
-
-# define system inputs
-u1 = sp.symbols("u1", cls=sp.Function)
-u1_t = u1(t)
-u2 = sp.symbols("u2", cls=sp.Function)
-u2_t = u2(t)
-
 # define parameters
 alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
                                           "Gamma:2",
@@ -43,6 +38,33 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
                                           "rho:3",
                                           "L",
                                           "T_m"), real=True)
+
+# define boundaries
+boundaries_x1 = [
+    # sp.Eq(sp.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
+    sp.Eq(sp.Subs(x1_zt, z, 0), u1_t),
+    sp.Eq(sp.Subs(x1_zt, z, 1), Tm),
+]
+boundaries_x2 = [
+    sp.Eq(sp.Subs(x2_zt.diff(z), z, 0), (gamma_t - Gamma[1]) / k[1] * u2_t),
+    # sp.Eq(sp.Subs(x2_zt, z, 0), u2_t),
+    sp.Eq(sp.Subs(x2_zt, z, 1), Tm),
+]
+
+# define approximation basis
+fem_base = ss.create_lag1ast_base(z, spat_bounds, N)
+
+# create approximations, homogenizing where needed
+x1_approx, x1_test = ss.create_approximation(z, fem_base, boundaries_x1)
+x2_approx, x2_test = ss.create_approximation(z, fem_base, boundaries_x2)
+gamma_approx = ss.get_weights(1)[0]
+
+# define symbols for test functions
+phi_1 = sp.symbols("phi1_(:{})".format(len(x1_test)), cls=sp.Function)
+phi_1z = [p(z) for p in phi_1]
+phi_2 = sp.symbols("phi2_(:{})".format(len(x2_test)), cls=sp.Function)
+phi_2z = [p(z) for p in phi_2]
+
 param_list = [
     (alpha[0], 1),
     (alpha[1], 2),
@@ -60,22 +82,21 @@ param_list = [
 equations = []
 
 # define the variational formulation for both phases
-for idx, (x, u) in enumerate(zip([x1_zt, x2_zt], [u1_t, u2_t])):
+for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
+                                      [u1_t, u2_t],
+                                      [phi_1z, phi_2z])):
     weak_forms = []
-    for p in phi_z:
+    for p in phi:
         beta = (gamma_t - Gamma[idx])
-        delta = -(-1) ** idx
         exp = (
             ss.InnerProduct(x.diff(t), p, spat_bounds)
             - alpha[idx] / beta**2 * (
                 (x.diff(z) * p).subs(z, 1)
-                - delta * beta / k[idx] * u * p.subs(z, 0)
+                - (x.diff(z) * p).subs(z, 0)
                 - ss.InnerProduct(x.diff(z), p.diff(z), spat_bounds)
             )
             - gamma_t.diff(t) / beta * ss.InnerProduct(z*x.diff(z), p, spat_bounds)
         )
-        # sp.pprint(exp)
-        # quit()
         weak_forms.append(exp)
     equations += weak_forms
 
@@ -88,40 +109,65 @@ equations.append(g_exp)
 # print(u1_t in equations[0].atoms(sp.Function))
 # print(equations[0])
 
-# approximations
-fem_base = ss.create_lag1ast_base(z, spat_bounds, N)
-x1_approx = ss.create_approximation(z, fem_base, ess_bounds=[(1, Tm)])
-x2_approx = ss.create_approximation(z, fem_base, ess_bounds=[(1, Tm)])
-gamma_approx = ss.get_weights(1)[0]
 # print(x1_approx)
 # print(x1_approx)
 # print(x1_approx.atoms(sp.Function))
 # print(gamma_approx.atoms(sp.Function))
-
-# specify replacement dicts
-variable_list = [
-    (x1, lambda _z, _t: x1_approx.subs([(z, _z), (t, _t)])),
-    (x2, lambda _z, _t: x2_approx.subs([(z, _z), (t, _t)])),
-    (gamma, lambda _t: gamma_approx.subs(t, _t)),
-]
+# x1_list.append((x1, lambda _z, _t: x1_approx.subs([(z, _z), (t, _t)])))
 
 
-def wrap_expr(expr, sym):
-    def wrapped_func(_z):
-        return expr.subs(sym, _z)
+def wrap_expr(expr, *sym):
+    def wrapped_func(*_sym):
+        return expr.subs(list(zip(sym, _sym)))
 
     return wrapped_func
 
 
-test_list = [(p, wrap_expr(f, z))
-             for p, f in zip(phi, fem_base[:-1])]
-print(test_list)
+def gen_func_subs_pair(func, expr):
+    if isinstance(func, sp.Function):
+        a = func.func
+        args = func.args
+    elif isinstance(func, sp.Subs):
+        a = func
+        if isinstance(func.args[0], sp.Derivative):
+            args = func.args[0].args[0].args
+        elif isinstance(func.args[0], sp.Function):
+            args = func.args[0].args
+        else:
+            raise NotImplementedError
+    else:
+        raise NotImplementedError
+
+    b = wrap_expr(expr, *args)
+    return a, b
+
+
+# specify replacement dicts
+x1_list = [gen_func_subs_pair(*c.args) for c in boundaries_x1]
+# x1_list = [gen_func_subs_pair(*c.args) for c in boundaries_x1]
+x1_list.append(gen_func_subs_pair(x1_zt, x1_approx))
+x2_list = [gen_func_subs_pair(*c.args) for c in boundaries_x2]
+x2_list.append(gen_func_subs_pair(x2_zt, x2_approx))
+test_list_1 = [gen_func_subs_pair(*p) for p in zip(phi_1z, x1_test)]
+test_list_2 = [gen_func_subs_pair(*p) for p in zip(phi_2z, x2_test)]
+gamma_list = [gen_func_subs_pair(gamma_t, gamma_approx)]
+
+variable_list = x1_list + x2_list + test_list_1 + test_list_2 + gamma_list
+# print(variable_list)
 
 rep_eqs = []
-for eq in equations:
+for eq in tqdm(equations):
     rep_eq = eq
-    for pair in variable_list + test_list:
+    # rep_eq = eq.subs(param_list)
+    # print(rep_eq)
+    for pair in tqdm(variable_list):
+        # print("Substituting pair:")
+        # print(pair)
         rep_eq = rep_eq.replace(*pair)
+        if u1_t in rep_eq.atoms(sp.Function):
+            print(rep_eq.atoms(sp.Derivative))
+            # print("Result:")
+        # print(rep_eq)
 
     rep_eqs.append(rep_eq.subs(param_list).doit())
 
@@ -163,11 +209,11 @@ t_eqs = [eq.subs({**state_dict, **state_dt_dict}) for eq in rep_eqs]
 print(t_eqs)
 
 if 0:
-    mat_form = sp.linear_eq_to_matrix(t_eqs, list(state_dt_dict.values))
+    mat_form = sp.linear_eq_to_matrix(t_eqs, state_dt_dict.values())
     print(new_targets)
     print(mat_form)
 
-rhs = sp.solve(t_eqs, list(state_dt_dict.values()))
+rhs = sp.solve(t_eqs, list(state_dt_dict.values()), dict=True)[0]
 print(rhs)
 
 # input and variables

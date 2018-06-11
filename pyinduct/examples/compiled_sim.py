@@ -27,7 +27,7 @@ jac_cb = sp.lambdify(args=[inputs, state], expr=rhs_jac, modules="numpy")
 
 
 def inputs(t):
-    return np.array([-10, 0])
+    return np.array([0, 0])
 
 
 def rhs(t, y):
@@ -42,10 +42,24 @@ def jac(t, y):
     return jac
 
 
-y0 = np.array([0, 0, 0, 0, .1])
+y0 = np.array([-10, -10, 10, 10, .5])
 res = solve_ivp(rhs, (0, 100), y0, jac=jac, method="BDF")
 
-f = plt.figure()
-for point in res.y:
-    plt.plot(res.t, point)
+f, ax1 = plt.subplots(1, 1, sharex=True)
+for idx, point in enumerate(res.y):
+    ax1.plot(res.t, point, label="x_{}".format(idx))
+ax1.legend()
+ax1.grid()
+
+z_grid = np.linspace(0, 1, num=N)
+f, ax2 = plt.subplots(1, 1, sharex=True)
+for idx, point in enumerate(res.y.T[::10]):
+    ax2.plot(z_grid, np.hstack((point[:2], 0)), label="T_{}".format(idx))
+ax2.legend()
+ax2.grid()
+
+# f = plt.figure()
+# for idx, point in enumerate(res.y):
+#     plt.plot(res.t, point, label="x_{}".format(idx))
+#
 plt.show()

@@ -41,8 +41,8 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
 
 # define boundaries
 boundaries_x1 = [
-    # sp.Eq(sp.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
-    sp.Eq(sp.Subs(x1_zt, z, 0), u1_t),
+    sp.Eq(sp.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
+    # sp.Eq(sp.Subs(x1_zt, z, 0), u1_t),
     sp.Eq(sp.Subs(x1_zt, z, 1), Tm),
 ]
 boundaries_x2 = [
@@ -50,6 +50,14 @@ boundaries_x2 = [
     # sp.Eq(sp.Subs(x2_zt, z, 0), u2_t),
     sp.Eq(sp.Subs(x2_zt, z, 1), Tm),
 ]
+
+if 0:
+    # build state transformation
+    zeta_trafo = [(z - Gamma[idx])/(gamma_t - Gamma[idx]) for idx in range(2)]
+    x1_approx_z = x1_approx.subs(z, zeta_trafo[0])
+    x2_approx_z = x2_approx.subs(z, zeta_trafo[1])
+    print(x1_approx_z)
+    quit()
 
 # define approximation basis
 fem_base = ss.create_lag1ast_base(z, spat_bounds, N)
@@ -143,10 +151,13 @@ def gen_func_subs_pair(func, expr):
 
 
 # specify replacement dicts
-x1_list = [gen_func_subs_pair(*c.args) for c in boundaries_x1]
-# x1_list = [gen_func_subs_pair(*c.args) for c in boundaries_x1]
+x1_list = [
+    gen_func_subs_pair(*c.args) for c in boundaries_x1
+]
 x1_list.append(gen_func_subs_pair(x1_zt, x1_approx))
-x2_list = [gen_func_subs_pair(*c.args) for c in boundaries_x2]
+x2_list = [
+    gen_func_subs_pair(*c.args) for c in boundaries_x2
+]
 x2_list.append(gen_func_subs_pair(x2_zt, x2_approx))
 test_list_1 = [gen_func_subs_pair(*p) for p in zip(phi_1z, x1_test)]
 test_list_2 = [gen_func_subs_pair(*p) for p in zip(phi_2z, x2_test)]
@@ -164,12 +175,13 @@ for eq in tqdm(equations):
         # print("Substituting pair:")
         # print(pair)
         rep_eq = rep_eq.replace(*pair)
-        if u1_t in rep_eq.atoms(sp.Function):
-            print(rep_eq.atoms(sp.Derivative))
-            # print("Result:")
+        # if u1_t in rep_eq.atoms(sp.Function):
+            # print(rep_eq.atoms(sp.Derivative))
+        # print("Result:")
         # print(rep_eq)
 
-    rep_eqs.append(rep_eq.subs(param_list).doit())
+    rep_eqs.append(rep_eq)
+    # rep_eqs.append(rep_eq.subs(param_list).doit())
 
 # print(u1_t in rep_eqs[0].atoms(sp.Function))
 # print(rep_eqs[0])
@@ -184,7 +196,8 @@ targets = sorted(targets, key=lambda x: str(x))
 print(targets)
 
 if 0:
-    # introduce definitional equations for higher order derivatives
+    # introduce definitional equations for higher order derivatives or derived
+    # inputs
     extra_eqs = []
     extra_targets = []
     for t in targets:
@@ -213,6 +226,7 @@ if 0:
     print(new_targets)
     print(mat_form)
 
+print(">>> Solving for derivatives")
 rhs = sp.solve(t_eqs, list(state_dt_dict.values()), dict=True)[0]
 print(rhs)
 
@@ -242,3 +256,4 @@ jac = rhs_vec.jacobian(state)
 data = (str(input_vars), str(state_vars), str(rhs_list), str(jac))
 with open("symb_test_N={}.pkl".format(N), "wb") as f:
     pickle.dump(data, f)
+

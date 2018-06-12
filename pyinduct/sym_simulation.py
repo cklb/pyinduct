@@ -13,35 +13,65 @@ time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
 
 
-_symbol_cnt = 0
+# parameter database
+_parameters = {}
 
 
-def get_weights(n, letter="c"):
-    cnt = getattr(get_weights, "_cnt", 0)
-    if n < 0:
+def register_parameters(*args, **kwargs):
+    if args:
+        new_params = dict(args)
+        _parameters.update(new_params)
+
+    if kwargs:
+        _parameters.update(kwargs)
+
+
+def get_parameters(*args):
+    if not args:
+        return _parameters.items()
+    else:
+        return [_parameters.get(arg, None) for arg in args]
+
+
+_weight_cnt = 0
+_weight_letter = "_c"
+
+
+def get_weight():
+    global _weight_cnt
+    w = sp.Function("{}_{}".format(_weight_letter, _weight_cnt),
+                    real=True)(time)
+    _weight_cnt += 1
+    return w
+
+
+def get_weights(num):
+    if num < 0:
         raise ValueError
-    c = [sp.symbols("{}{}".format(letter, cnt + i),
-                    real=True,
-                    cls=sp.Function)(time)
-         for i in range(n)]
-    setattr(get_weights, "_cnt", cnt + n)
+    c = [get_weight() for i in range(num)]
     return c
 
 
-def get_derivative(n, letter="d"):
-    cnt = getattr(get_derivative, "_cnt", 0)
-    if n < 0:
-        raise ValueError
-    d = [sp.symbols("{}{}".format(letter, cnt + i),
-                    real=True,
-                    cls=sp.Function)(time)
-         for i in range(n)]
-    setattr(get_derivative, "_cnt", cnt + n)
-    return d
+class LumpedApproximation:
 
+    def __init__(self, expr, weights):
+        self._expr = expr
+        self._weights = weights
 
-class FieldVariable(sp.Function):
-    pass
+        # substitute all known symbols and generate callback
+        self._cb = sp.lambdify(weights,
+                               expr.subs(_get_parameters()),
+                               modules="numpy")
+
+    @property
+    def weights(self):
+        return self._weights
+
+    def __call__(self, *args, **kwargs):
+        if args:
+            return self._cb(args)
+        if kwargs:
+            return self._cb([kwargs[w] for w in self._weights])
 
 
 class InnerProduct(sp.Expr):
@@ -167,10 +197,11 @@ def create_approximation(sym, funcs, bounds):
     nat_funcs = [func for idx, func in enumerate(funcs) if idx not in ess_idxs]
 
     # define approximated system variable
-    c = get_weights(len(nat_funcs))
+    c = [sp.Dummy() for i in range(len(nat_funcs))]
     x_nat = sp.Add(*[c * f for c, f in zip(c, nat_funcs)])
 
     x_comp = x_ess + x_nat
+    x_approx = LumpedApproximation(x_comp, c)
 
-    return x_comp, nat_funcs
+    return x_approx, nat_funcs
 

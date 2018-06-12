@@ -1,3 +1,4 @@
+import time
 import pickle
 import sympy as sp
 # from sympy.physics.quantum.innerproduct import InnerProduct
@@ -31,6 +32,12 @@ x2_zt = x2(z, t)
 gamma = sp.symbols("gamma", cls=sp.Function)
 gamma_t = gamma(t)
 
+# define symbols for test functions
+phi_1k = sp.symbols("phi1_k", cls=sp.Function)
+phi_1kz = phi_1k
+phi_2k = sp.symbols("phi2_k", cls=sp.Function)
+phi_2kz = phi_2k
+
 # define parameters
 alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
                                           "Gamma:2",
@@ -38,6 +45,20 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
                                           "rho:3",
                                           "L",
                                           "T_m"), real=True)
+param_list = [
+    (alpha[0], 1),
+    (alpha[1], 2),
+    (Gamma[0], spat_bounds[0]),
+    (Gamma[1], spat_bounds[1]),
+    (k[0], 1),
+    (k[1], 2),
+    (rho[0], 1),
+    (rho[1], 2),
+    (rho[2], 1.5),  # rho(Tm)
+    (L, 1),
+    (Tm, 0),
+]
+ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries_x1 = [
@@ -67,46 +88,23 @@ x1_approx, x1_test = ss.create_approximation(z, fem_base, boundaries_x1)
 x2_approx, x2_test = ss.create_approximation(z, fem_base, boundaries_x2)
 gamma_approx = ss.get_weights(1)[0]
 
-# define symbols for test functions
-phi_1 = sp.symbols("phi1_(:{})".format(len(x1_test)), cls=sp.Function)
-phi_1z = [p(z) for p in phi_1]
-phi_2 = sp.symbols("phi2_(:{})".format(len(x2_test)), cls=sp.Function)
-phi_2z = [p(z) for p in phi_2]
-
-param_list = [
-    (alpha[0], 1),
-    (alpha[1], 2),
-    (Gamma[0], spat_bounds[0]),
-    (Gamma[1], spat_bounds[1]),
-    (k[0], 1),
-    (k[1], 2),
-    (rho[0], 1),
-    (rho[1], 2),
-    (rho[2], 1.5),  # rho(Tm)
-    (L, 1),
-    (Tm, 0),
-]
-
-equations = []
 
 # define the variational formulation for both phases
+equations = []
 for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
                                       [u1_t, u2_t],
-                                      [phi_1z, phi_2z])):
-    weak_forms = []
-    for p in phi:
-        beta = (gamma_t - Gamma[idx])
-        exp = (
-            ss.InnerProduct(x.diff(t), p, spat_bounds)
-            - alpha[idx] / beta**2 * (
-                (x.diff(z) * p).subs(z, 1)
-                - (x.diff(z) * p).subs(z, 0)
-                - ss.InnerProduct(x.diff(z), p.diff(z), spat_bounds)
-            )
-            - gamma_t.diff(t) / beta * ss.InnerProduct(z*x.diff(z), p, spat_bounds)
+                                      [phi_1kz, phi_2kz])):
+    beta = (gamma_t - Gamma[idx])
+    expr = (
+        ss.InnerProduct(x.diff(t), phi, spat_bounds)
+        - alpha[idx] / beta**2 * (
+            (x.diff(z) * phi).subs(z, 1)
+            - (x.diff(z) * phi).subs(z, 0)
+            - ss.InnerProduct(x.diff(z), phi.diff(z), spat_bounds)
         )
-        weak_forms.append(exp)
-    equations += weak_forms
+        - gamma_t.diff(t) / beta * ss.InnerProduct(z*x.diff(z), phi, spat_bounds)
+    )
+    equations.append(expr)
 
 # define the ode for the phase boundary
 g_exp = (k[0] / (gamma_t - Gamma[0]) * x1_zt.diff(z).subs(z, 1)
@@ -166,6 +164,8 @@ gamma_list = [gen_func_subs_pair(gamma_t, gamma_approx)]
 variable_list = x1_list + x2_list + test_list_1 + test_list_2 + gamma_list
 # print(variable_list)
 
+# substitute formulations
+t0 = time.clock()
 rep_eqs = []
 for eq in tqdm(equations):
     rep_eq = eq
@@ -180,8 +180,9 @@ for eq in tqdm(equations):
         # print("Result:")
         # print(rep_eq)
 
-    rep_eqs.append(rep_eq)
-    # rep_eqs.append(rep_eq.subs(param_list).doit())
+    rep_eqs.append(rep_eq.subs(param_list).doit())
+print(time.clock() - t0)
+# quit()
 
 # print(u1_t in rep_eqs[0].atoms(sp.Function))
 # print(rep_eqs[0])

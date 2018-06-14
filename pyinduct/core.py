@@ -147,20 +147,24 @@ class Function(BaseFraction):
     or directly provide a callable *eval_handle* and callable
     *derivative_handles* if spatial derivatives are required for the
     application.
+
+    Args:
+        eval_handle (callable): Callable object that can be evaluated.
+        domain((list of) tuples): Domain on which the eval_handle is defined.
+        nonzero(tuple): Region in which the eval_handle will return
+        nonzero output. Must be a subset of *domain*
+        derivative_handles (list): List of callable(s) that contain
+        derivatives of eval_handle
     """
 
+    # nargs = 1
+
     # TODO: overload add and mul operators
+    # def __new__(cls, eval_handle, domain=(-np.inf, np.inf), nonzero=(-np.inf, np.inf), derivative_handles=None):
+    #     obj = super(Function, cls).__new__(cls, sp.S("z"))
+    #     return obj
 
     def __init__(self, eval_handle, domain=(-np.inf, np.inf), nonzero=(-np.inf, np.inf), derivative_handles=None):
-        """
-        Args:
-            eval_handle (callable): Callable object that can be evaluated.
-            domain((list of) tuples): Domain on which the eval_handle is defined.
-            nonzero(tuple): Region in which the eval_handle will return
-                nonzero output. Must be a subset of *domain*
-            derivative_handles (list): List of callable(s) that contain
-                derivatives of eval_handle
-        """
         super().__init__(self)
         self._vectorial = False
         self._function_handle = None

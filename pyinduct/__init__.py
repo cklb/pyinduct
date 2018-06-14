@@ -20,9 +20,9 @@ from .core import *
 # noinspection PyUnresolvedReferences
 from .control import *
 # noinspection PyUnresolvedReferences
-from .eigenfunctions import *
+# from .eigenfunctions import *
 # noinspection PyUnresolvedReferences
-from .trajectory import *
+# from .trajectory import *
 # noinspection PyUnresolvedReferences
 from .registry import *
 # noinspection PyUnresolvedReferences

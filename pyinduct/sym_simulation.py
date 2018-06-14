@@ -4,10 +4,14 @@ New simulation module approach that makes use of sympy for expression handling
 
 from copy import copy
 import sympy as sp
+from time import clock
+from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
 import numpy as np
+from tqdm import tqdm
 
-from .core import Domain
+from .registry import get_base
+from .core import Domain, Function
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -52,20 +56,76 @@ def get_weights(num):
     return c
 
 
+_function_cnt = 0
+_function_letter = "_f"
+
+
+def get_function(sym):
+    global _function_cnt
+    f = sp.Function("{}_{}".format(_function_letter, _function_cnt),
+                    real=True)(sym)
+    _function_cnt += 1
+    return f
+
+
+_test_function_cnt = 0
+_test_function_letter = "_g"
+
+
+def get_test_function(sym):
+    global _test_function_cnt
+    g = sp.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
+                    real=True)(sym)
+    _test_function_cnt += 1
+    return g
+
+
+_input_cnt = 0
+_input_letter = "_u"
+
+
+def get_input():
+    global _input_cnt
+    u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
+                    real=True)(time)
+    _input_cnt += 1
+    return u
+
+
 class LumpedApproximation:
 
-    def __init__(self, expr, weights):
+    def __init__(self, expr, weights, base_map, bcs):
         self._expr = expr
         self._weights = weights
+        self._base_map = base_map
+        self._bcs = bcs
 
-        # substitute all known symbols and generate callback
+        # substitute all known functions and symbols and generate callback
+        impl_base = [(key, implemented_function(key.func, val)(*key.args))
+                     for key, val in base_map.items()]
+        impl_expr = expr.subs(impl_base)
         self._cb = sp.lambdify(weights,
-                               expr.subs(_get_parameters()),
+                               expr.subs(get_parameters()),
                                modules="numpy")
+    @property
+    def expression(self):
+        return self._expr
 
     @property
     def weights(self):
         return self._weights
+
+    @property
+    def base_map(self):
+        return self._base_map
+
+    @property
+    def base(self):
+        return [frac for frac, nat in self._base_map.values() if nat]
+
+    @property
+    def bcs(self):
+        return self._bcs
 
     def __call__(self, *args, **kwargs):
         if args:
@@ -165,43 +225,182 @@ def create_lag1ast_base(sym, bounds, num):
     return funcs
 
 
-def create_approximation(sym, funcs, bounds):
+def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     """
-    Create an approximation basis.
+    Create a lumped approximation of a distributed variable
     """
 
+    boundary_positions = []
     ess_bcs = []
+    nat_bcs = []
+    ess_pairs = []
     ess_idxs = []
-    # identify essential boundaries and their corresponding functions
-    for cond in bounds:
-        expr = cond.lhs.args[0]
-        if isinstance(expr, sp.Derivative):
-            # only dirichlet boundaries require extra work
-            continue
 
+    base = get_base(base_lbl)
+
+    # identify essential and natural boundaries
+    for cond in boundary_conditions:
+        expr = cond.lhs.args[0]
         assert sym in cond.lhs.args[1]
         assert len(cond.lhs.args[2]) == 1
+        # extract the position where the dirichlet condition is given
         pos = next(iter(cond.lhs.args[2]))
+        boundary_positions.append(pos)
+        pair = (cond, pos)
 
-        for idx, func in enumerate(funcs):
-            if func.subs(sym, pos) != 0:
-                ess_bcs.append((cond, func))
+        if isinstance(expr, sp.Derivative):
+            # only dirichlet boundaries require extra work
+            nat_bcs.append(pair)
+        else:
+            ess_bcs.append(pair)
+
+    # find the corresponding functions for the essential boundaries
+    for cond, pos in ess_bcs:
+        # identify all base fractions that differ from zero
+        for idx, func in enumerate(base):
+            if isinstance(func, Function):
+                res = func(pos)
+            elif isinstance(func, sp.Basic):
+                res = func.subs(sym, pos)
+            else:
+                raise NotImplementedError
+
+            if res != 0:
+                ess_pairs.append((cond, func))
                 ess_idxs.append(idx)
 
-    assert len(ess_bcs) <= len(bounds)
+        if len(ess_pairs) < len(ess_bcs):
+            # no suitable base fraction for homogenisation found, create one
+            inhom_pos = pos
+            hom_pos = next((p for p in boundary_positions if p != pos))
+            hom_frac = create_hom_func(sym, inhom_pos, hom_pos)
+            ess_pairs.append((cond, hom_frac))
 
-    # extract shape functions that are to be excluded
-    x_ess = sp.Add(*[cond.rhs * func for cond, func in ess_bcs])
+        assert len(ess_pairs) == len(ess_bcs)
 
-    # extract shape functions are to be kept
-    nat_funcs = [func for idx, func in enumerate(funcs) if idx not in ess_idxs]
+    base_mapping = {}
 
-    # define approximated system variable
-    c = [sp.Dummy() for i in range(len(nat_funcs))]
-    x_nat = sp.Add(*[c * f for c, f in zip(c, nat_funcs)])
+    # inhomogeneous parts that are to be excluded
+    x_ess = 0
+    for cond, func in ess_pairs:
+        d_func = get_function(sym)
+        x_ess += cond.rhs * d_func
+        base_mapping[d_func] = func, False
+
+    # extract shape functions which are to be kept
+    nat_funcs = [func for idx, func in enumerate(base) if idx not in ess_idxs]
+
+    # homogeneous part
+    x_nat = 0
+    if weights is None:
+        weights = get_weights(len(nat_funcs))
+    for idx, func in enumerate(nat_funcs):
+        d_func = get_function(sym)
+        x_nat += weights[idx] * d_func
+        base_mapping[d_func] = func, True
 
     x_comp = x_ess + x_nat
-    x_approx = LumpedApproximation(x_comp, c)
+    x_approx = LumpedApproximation(x_comp, weights, base_mapping, boundary_conditions)
 
-    return x_approx, nat_funcs
+    return x_approx
 
+
+def create_hom_func(sym, pos_a, pos_b, mode="linear"):
+    r"""
+    Build a symbolic expression for homogenisation purposes.
+
+    This function will evaluate to one at *pos_a* and to zero at *pos_b*.
+
+    Args:
+        sym: Symbol to use.
+        pos_a: First position.
+        pos_b: Second Position.
+
+    Keyword Args:
+        mode(str): Function type to use, choices are "linear", "trig" and "exp".
+
+    Returns: Sympy expression
+
+    """
+    if mode == "linear":
+        variables = sp.symbols("_m _n")
+        _f = variables[0]*sym + variables[1]
+    elif mode == "trig":
+        variables = sp.symbols("_a _b")
+        _f = sp.cos(variables[0]*sym + variables[1])
+    # elif mode == "exp":
+    #     variables = sp.symbols("_c _b")
+    #     _f = sp.cos(variables[0]*sym + variables[1])
+    else:
+        raise NotImplementedError
+
+    eqs = [_f.subs(pos_a) - 1, _f.subs(pos_b - 0)]
+    sol = sp.solve(eqs, variables, dict=True)[0]
+    res = _f.subs(sol)
+
+    return res
+
+
+def substitute_approximations(weak_form, mapping):
+
+    def wrap_expr(expr, *sym):
+        def wrapped_func(*_sym):
+            return expr.subs(list(zip(sym, _sym)))
+
+        return wrapped_func
+
+    def gen_func_subs_pair(func, expr):
+        if isinstance(func, sp.Function):
+            a = func.func
+            args = func.args
+        elif isinstance(func, sp.Subs):
+            a = func
+            if isinstance(func.args[0], sp.Derivative):
+                args = func.args[0].args[0].args
+            elif isinstance(func.args[0], sp.Function):
+                args = func.args[0].args
+            else:
+                raise NotImplementedError
+        else:
+            raise NotImplementedError
+
+        b = wrap_expr(expr, *args)
+        return a, b
+
+    rep_list = []
+    for sym, approx in mapping.items():
+        if _test_function_letter in str(sym):
+            rep_list += [gen_func_subs_pair(sym, elem) for elem in approx]
+        elif isinstance(approx, LumpedApproximation):
+            rep_list.append(gen_func_subs_pair(sym, approx.expression))
+            rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
+        else:
+            rep_list.append(gen_func_subs_pair(sym, approx))
+
+    new_exprs = []
+    new_exprs += [expr.replace(*subs_map) for expr in weak_form
+                  if expr.atoms(sym)]
+
+    # substitute formulations
+    t0 = clock()
+    rep_eqs = []
+    for eq in tqdm(new_exprs):
+        rep_eq = eq
+        # rep_eq = eq.subs(param_list)
+        # print(rep_eq)
+        for pair in tqdm(rep_list):
+            # print("Substituting pair:")
+            # print(pair)
+            rep_eq = rep_eq.replace(*pair)
+            # if u1_t in rep_eq.atoms(sp.Function):
+            # print(rep_eq.atoms(sp.Derivative))
+            # print("Result:")
+            # print(rep_eq)
+
+    print(clock() - t0)
+    # quit()
+
+    # print(u1_t in rep_eqs[0].atoms(sp.Function))
+    # print(rep_eqs[0])
+    # quit()
+    return rep_eqs

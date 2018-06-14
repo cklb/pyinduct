@@ -1,5 +1,6 @@
 import pickle
 import sympy as sp
+import symengine as se
 # from sympy.physics.quantum.innerproduct import InnerProduct
 
 import pyinduct as pi
@@ -21,11 +22,11 @@ u1_t = ss.get_input()
 u2_t = ss.get_input()
 
 # define symbols of spatially distributed and lumped system variables
-x1 = sp.symbols("x1", cls=sp.Function)
+x1 = se.symbols("x1", cls=sp.Function)
 x1_zt = x1(z, t)
-x2 = sp.symbols("x2", cls=sp.Function)
+x2 = se.symbols("x2", cls=sp.Function)
 x2_zt = x2(z, t)
-gamma = sp.symbols("gamma", cls=sp.Function)
+gamma = se.symbols("gamma", cls=sp.Function)
 gamma_t = gamma(t)
 
 # define symbols for test functions
@@ -56,14 +57,14 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries_x1 = [
-    sp.Eq(sp.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
-    # sp.Eq(sp.Subs(x1_zt, z, 0), u1_t),
-    sp.Eq(sp.Subs(x1_zt, z, 1), Tm),
+    se.Eq(se.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
+    # se.Eq(se.Subs(x1_zt, z, 0), u1_t),
+    se.Eq(se.Subs(x1_zt, z, 1), Tm),
 ]
 boundaries_x2 = [
-    sp.Eq(sp.Subs(x2_zt.diff(z), z, 0), (gamma_t - Gamma[1]) / k[1] * u2_t),
-    # sp.Eq(sp.Subs(x2_zt, z, 0), u2_t),
-    sp.Eq(sp.Subs(x2_zt, z, 1), Tm),
+    se.Eq(se.Subs(x2_zt.diff(z), z, 0), (gamma_t - Gamma[1]) / k[1] * u2_t),
+    # sp.Eq(se.Subs(x2_zt, z, 0), u2_t),
+    se.Eq(se.Subs(x2_zt, z, 1), Tm),
 ]
 
 if 0:

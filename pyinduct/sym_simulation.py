@@ -4,6 +4,7 @@ New simulation module approach that makes use of sympy for expression handling
 
 from copy import copy
 import sympy as sp
+import symengine as se
 from time import clock
 from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
@@ -13,8 +14,8 @@ from tqdm import tqdm
 from .registry import get_base
 from .core import Domain, Function
 
-time = sp.symbols("t", real=True)
-space = sp.symbols("z:3", real=True)
+time = se.symbols("t", real=True)
+space = se.symbols("z:3", real=True)
 
 
 # parameter database
@@ -43,7 +44,7 @@ _weight_letter = "_c"
 
 def get_weight():
     global _weight_cnt
-    w = sp.Function("{}_{}".format(_weight_letter, _weight_cnt),
+    w = se.Function("{}_{}".format(_weight_letter, _weight_cnt),
                     real=True)(time)
     _weight_cnt += 1
     return w
@@ -62,7 +63,7 @@ _function_letter = "_f"
 
 def get_function(sym):
     global _function_cnt
-    f = sp.Function("{}_{}".format(_function_letter, _function_cnt),
+    f = se.Function("{}_{}".format(_function_letter, _function_cnt),
                     real=True)(sym)
     _function_cnt += 1
     return f
@@ -74,7 +75,7 @@ _test_function_letter = "_g"
 
 def get_test_function(*symbols):
     global _test_function_cnt
-    g = sp.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
+    g = se.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
                     real=True)(*symbols)
     _test_function_cnt += 1
     return g
@@ -86,7 +87,7 @@ _input_letter = "_u"
 
 def get_input():
     global _input_cnt
-    u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
+    u = se.Function("{}_{}".format(_input_letter, _input_cnt),
                     real=True)(time)
     _input_cnt += 1
     return u
@@ -104,9 +105,10 @@ class LumpedApproximation:
         impl_base = [(key, implemented_function(key.func, val)(*key.args))
                      for key, val in base_map.items()]
         impl_expr = expr.subs(impl_base)
-        self._cb = sp.lambdify(weights,
-                               expr.subs(get_parameters()),
+        self._cb = se.lambdify(weights,
+                               [expr.subs(get_parameters())],
                                modules="numpy")
+
     @property
     def expression(self):
         return self._expr
@@ -136,7 +138,7 @@ class LumpedApproximation:
             return self._cb([kwargs[w] for w in self._weights])
 
 
-class InnerProduct(sp.Expr):
+class InnerProduct(se.Expr):
     """ An unevaluated Inner Product on L2
 
     Args:
@@ -262,7 +264,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
         for idx, func in enumerate(base):
             if isinstance(func, Function):
                 res = func(pos)
-            elif isinstance(func, sp.Basic):
+            elif isinstance(func, se.Basic):
                 res = func.subs(sym, pos)
             else:
                 raise NotImplementedError
@@ -325,11 +327,11 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
 
     """
     if mode == "linear":
-        variables = sp.symbols("_m _n")
+        variables = se.symbols("_m _n")
         _f = variables[0]*sym + variables[1]
     elif mode == "trig":
-        variables = sp.symbols("_a _b")
-        _f = sp.cos(variables[0]*sym + variables[1])
+        variables = se.symbols("_a _b")
+        _f = se.cos(variables[0]*sym + variables[1])
     # elif mode == "exp":
     #     variables = sp.symbols("_c _b")
     #     _f = sp.cos(variables[0]*sym + variables[1])
@@ -337,7 +339,7 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
         raise NotImplementedError
 
     eqs = [_f.subs(pos_a) - 1, _f.subs(pos_b - 0)]
-    sol = sp.solve(eqs, variables, dict=True)[0]
+    sol = se.solve(eqs, variables, dict=True)[0]
     res = _f.subs(sol)
 
     return res
@@ -354,14 +356,14 @@ def substitute_approximations(weak_form, mapping):
         return wrapped_func
 
     def gen_func_subs_pair(func, expr):
-        if isinstance(func, sp.Function):
+        if isinstance(func, se.Function):
             a = func.func
             args = func.args
-        elif isinstance(func, sp.Subs):
+        elif isinstance(func, se.Subs):
             a = func
-            if isinstance(func.args[0], sp.Derivative):
+            if isinstance(func.args[0], se.Derivative):
                 args = func.args[0].args[0].args
-            elif isinstance(func.args[0], sp.Function):
+            elif isinstance(func.args[0], se.Function):
                 args = func.args[0].args
             else:
                 raise NotImplementedError

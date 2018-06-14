@@ -4,6 +4,7 @@ In the Core module you can find all basic classes and functions which form the b
 import warnings
 import numbers
 
+import sympy as sp
 import numpy as np
 import collections
 from copy import copy, deepcopy

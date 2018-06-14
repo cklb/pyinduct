@@ -72,10 +72,10 @@ _test_function_cnt = 0
 _test_function_letter = "_g"
 
 
-def get_test_function(sym):
+def get_test_function(*symbols):
     global _test_function_cnt
     g = sp.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
-                    real=True)(sym)
+                    real=True)(*symbols)
     _test_function_cnt += 1
     return g
 
@@ -121,7 +121,9 @@ class LumpedApproximation:
 
     @property
     def base(self):
-        return [frac for frac, nat in self._base_map.values() if nat]
+        """ Return all base fractions that do not coincide with essential bcs
+        """
+        return [frac for frac, ess in self._base_map.values() if not ess]
 
     @property
     def bcs(self):
@@ -285,7 +287,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     for cond, func in ess_pairs:
         d_func = get_function(sym)
         x_ess += cond.rhs * d_func
-        base_mapping[d_func] = func, False
+        base_mapping[d_func] = func, True
 
     # extract shape functions which are to be kept
     nat_funcs = [func for idx, func in enumerate(base) if idx not in ess_idxs]
@@ -297,7 +299,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     for idx, func in enumerate(nat_funcs):
         d_func = get_function(sym)
         x_nat += weights[idx] * d_func
-        base_mapping[d_func] = func, True
+        base_mapping[d_func] = func, False
 
     x_comp = x_ess + x_nat
     x_approx = LumpedApproximation(x_comp, weights, base_mapping, boundary_conditions)
@@ -343,6 +345,8 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
 
 def substitute_approximations(weak_form, mapping):
 
+    ext_form, ext_mapping = expand_kth_terms(weak_form, mapping)
+
     def wrap_expr(expr, *sym):
         def wrapped_func(*_sym):
             return expr.subs(list(zip(sym, _sym)))
@@ -367,27 +371,19 @@ def substitute_approximations(weak_form, mapping):
         b = wrap_expr(expr, *args)
         return a, b
 
+    # create substitution list
     rep_list = []
-    for sym, approx in mapping.items():
-        if _test_function_letter in str(sym):
-            rep_list += [gen_func_subs_pair(sym, elem) for elem in approx]
-        elif isinstance(approx, LumpedApproximation):
+    for sym, approx in ext_mapping.items():
+        if isinstance(approx, LumpedApproximation):
             rep_list.append(gen_func_subs_pair(sym, approx.expression))
             rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
-    new_exprs = []
-    new_exprs += [expr.replace(*subs_map) for expr in weak_form
-                  if expr.atoms(sym)]
-
     # substitute formulations
-    t0 = clock()
     rep_eqs = []
-    for eq in tqdm(new_exprs):
+    for eq in tqdm(ext_form):
         rep_eq = eq
-        # rep_eq = eq.subs(param_list)
-        # print(rep_eq)
         for pair in tqdm(rep_list):
             # print("Substituting pair:")
             # print(pair)
@@ -397,10 +393,47 @@ def substitute_approximations(weak_form, mapping):
             # print("Result:")
             # print(rep_eq)
 
-    print(clock() - t0)
-    # quit()
+        rep_eqs.append(rep_eq.doit())
 
-    # print(u1_t in rep_eqs[0].atoms(sp.Function))
-    # print(rep_eqs[0])
-    # quit()
     return rep_eqs
+
+
+def expand_kth_terms(weak_form, mapping):
+    """ Search for kth terms and expand the equation system by their mappings"""
+
+    new_exprs = []
+    new_mapping = {}
+    kth_placeholders = {}
+    # search for kth placeholders (by now given by testfunctions)
+    for sym, approx in mapping.items():
+        if _test_function_letter in str(sym):
+            kth_placeholders[sym] = approx
+        else:
+            new_mapping[sym] = approx
+
+    # replace the kth occurrences by adding extra equations for every entry
+    for eq in weak_form:
+        occurrences = [sym in eq.atoms(sp.Function)
+                       for sym in kth_placeholders.keys()]
+        if not any(occurrences):
+            # if no placeholder is used, directly forward the equation
+            new_exprs.append(eq)
+        else:
+            for sym, approx in kth_placeholders.items():
+                new_eqs, new_map = _substitute_kth_occurrence(eq, sym, approx)
+                new_exprs += new_eqs
+                new_mapping.update(new_map)
+
+    return new_exprs, new_mapping
+
+
+def _substitute_kth_occurrence(equation, symbol, expressions):
+    new_eqs = []
+    mappings = {}
+    for expr in expressions:
+        if equation.atoms(symbol):
+            _f = get_test_function(*symbol.args)
+            new_eqs.append(equation.replace(symbol, _f))
+            mappings[_f] = expr
+
+    return new_eqs, mappings

@@ -244,11 +244,12 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
 
     # identify essential and natural boundaries
     for cond in boundary_conditions:
-        expr = cond.lhs.args[0]
-        assert sym in cond.lhs.args[1]
-        assert len(cond.lhs.args[2]) == 1
+        lhs = cond.args[0]
+        expr = lhs.args[0]
+        assert sym in lhs.args[1]
+        assert len(lhs.args[2]) == 1
         # extract the position where the dirichlet condition is given
-        pos = next(iter(cond.lhs.args[2]))
+        pos = next(iter(lhs.args[2]))
         boundary_positions.append(pos)
         pair = (cond, pos)
 

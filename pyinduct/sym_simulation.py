@@ -480,17 +480,14 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     return new_eqs, mappings
 
 
-def create_first_order_system(weak_form):
-    # collect derivatives
-    temp_derivatives = set()
-    for eq in weak_form:
-        t_ders = [der for der in eq.atoms(sp.Derivative) if der.args[1] == time]
-        temp_derivatives.update(t_ders)
+def create_first_order_system(weak_forms):
+    temp_derivatives = _find_derivatives(weak_forms, time)
+
+    new_forms = weak_forms[:]
+    for der in temp_derivatives:
+        new_forms, subs_list, new_targets = _convert_higher_derivative(new_forms, der)
 
     # replace functions with dummies
-    new_forms = weak_form
-    new_mapping = {}
-    new_targets = set()
     for der in temp_derivatives:
         new_forms, mapping, targets = _substitute_temporal_derivative(new_forms, der)
         new_mapping.update(mapping)
@@ -504,6 +501,63 @@ def create_first_order_system(weak_form):
     return new_forms
 
 
+def _find_derivatives(weak_form, sym):
+    """ Find derivatives """
+    temp_derivatives = set()
+    for eq in weak_form:
+        t_ders = [der for der in eq.atoms(sp.Derivative) if der.args[1] == sym]
+        # pairs = [()]
+        temp_derivatives.update(t_ders)
+
+    return temp_derivatives
+
+
+def _convert_higher_derivative(weak_forms, derivative):
+
+    target_set = set()
+    subs_list = []
+
+    expr = derivative.args[0]
+    order = len(derivative.args) - 1
+
+    if _weight_letter in str(expr):
+        if order > 1:
+            # c1_dd = ...
+            # c1_d = c2
+            # -> c1_dd = c2_d
+            # -> c2_d = ...
+            new_var = get_weight()
+            new_deriv = derivative.func(*derivative.args[:-1])
+            new_eq = new_var - new_deriv
+            new_forms = [form.subs(derivative, new_var.diff(time))
+                         for form in weak_forms]
+            new_forms.append(new_eq)
+            if order > 2:
+                new_forms, subs_list, target_set = _convert_higher_derivative(
+                    new_forms, new_deriv)
+        else:
+            d_der = sp.Dummy()
+            subs_pair = derivative, d_der
+            subs_list.append(subs_pair)
+            target_set.add(d_der)
+    elif _input_letter in str(expr):
+        # u1_d = ...
+        # v = u1_d
+        # -> v_d = u1_dd
+        # -> c2_d = ...
+        new_var = get_weight()
+        new_deriv = derivative.func(*derivative.args[:-1])
+        new_eq = new_var - new_deriv
+        new_forms = [form.subs(derivative, new_var.diff(time))
+                     for form in weak_forms]
+        new_forms.append(new_eq)
+        if order > 2:
+            new_forms, subs_list, target_set = _convert_higher_derivative(
+                new_forms, new_deriv)
+
+    return new_forms, subs_list, target_set
+
+
 def _substitute_temporal_derivative(weak_forms, derivative):
 
     subs_list = []
@@ -513,17 +567,24 @@ def _substitute_temporal_derivative(weak_forms, derivative):
     order = len(derivative.args) - 1
 
     d_der = sp.Dummy()
-    subs_pair = (derivative, d_der)
-    if _weight_letter in str(expr) and order > 1 \
-            or _input_letter in str(expr) and order > 0:
+    if _weight_letter in str(expr) and order > 1:
+        # c1_dd = ...
+        # c1_d = c2
+        # -> c1_dd = c2_d
+        # -> c2_d = ...
+        new_var = get_weight()
         new_deriv = derivative.func(*derivative.args[:-1])
-        new_eq = new_deriv - d_der
+        new_eq = new_var - new_deriv
         weak_forms.append(new_eq)
+        subs_pair = (derivative, new_var.diff(t))
         weak_forms, new_s_list, new_t_set = _substitute_temporal_derivative(
             weak_forms,
             new_deriv)
         subs_list += new_s_list
         target_set.update(new_t_set)
+
+    if _input_letter in str(expr) and order > 0:
+        pass
 
     if _weight_letter in str(expr) and order == 1:
         target_set.add(d_der)

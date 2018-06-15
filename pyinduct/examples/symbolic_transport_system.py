@@ -41,8 +41,8 @@ x_approx = ss.create_approximation(z, "fem", boundaries)
 
 # define the variational formulation for both phases
 weak_form = [
-    ss.InnerProduct(x.diff(t), phi_k, spat_bounds)
-    - c * ss.InnerProduct(x.diff(z), phi_k, spat_bounds)
+    ss.InnerProduct(x.diff(t, 2), phi_k, spat_bounds)
+    - c * ss.InnerProduct(x.diff(z, 2), phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 

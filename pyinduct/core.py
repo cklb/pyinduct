@@ -1692,6 +1692,7 @@ class Domain(object):
             raise ValueError("not enough arguments provided!")
 
         # mimic some ndarray properties
+        self.ndim = self._values.ndim
         self.shape = self._values.shape
         self.view = self._values.view
 

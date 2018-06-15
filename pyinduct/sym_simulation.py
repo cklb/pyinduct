@@ -4,7 +4,7 @@ New simulation module approach that makes use of sympy for expression handling
 
 from copy import copy
 import sympy as sp
-import symengine as se
+# import symengine as sp
 from time import clock
 from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
@@ -14,8 +14,8 @@ from tqdm import tqdm
 from .registry import get_base
 from .core import Domain, Function
 
-time = se.symbols("t", real=True)
-space = se.symbols("z:3", real=True)
+time = sp.symbols("t", real=True)
+space = sp.symbols("z:3", real=True)
 
 
 # parameter database
@@ -44,7 +44,7 @@ _weight_letter = "_c"
 
 def get_weight():
     global _weight_cnt
-    w = se.Function("{}_{}".format(_weight_letter, _weight_cnt),
+    w = sp.Function("{}_{}".format(_weight_letter, _weight_cnt),
                     real=True)(time)
     _weight_cnt += 1
     return w
@@ -63,10 +63,22 @@ _function_letter = "_f"
 
 def get_function(sym):
     global _function_cnt
-    f = se.Function("{}_{}".format(_function_letter, _function_cnt),
+    f = sp.Function("{}_{}".format(_function_letter, _function_cnt),
                     real=True)(sym)
     _function_cnt += 1
     return f
+
+
+_field_var_cnt = 0
+_field_var_letter = "_x"
+
+
+def get_field_variable(*symbols):
+    global _field_var_cnt
+    x = sp.Function("{}_{}".format(_field_var_letter, _field_var_cnt),
+                    real=True)(*symbols)
+    _field_var_cnt += 1
+    return x
 
 
 _test_function_cnt = 0
@@ -75,7 +87,7 @@ _test_function_letter = "_g"
 
 def get_test_function(*symbols):
     global _test_function_cnt
-    g = se.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
+    g = sp.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
                     real=True)(*symbols)
     _test_function_cnt += 1
     return g
@@ -87,7 +99,7 @@ _input_letter = "_u"
 
 def get_input():
     global _input_cnt
-    u = se.Function("{}_{}".format(_input_letter, _input_cnt),
+    u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
                     real=True)(time)
     _input_cnt += 1
     return u
@@ -105,7 +117,7 @@ class LumpedApproximation:
         impl_base = [(key, implemented_function(key.func, val)(*key.args))
                      for key, val in base_map.items()]
         impl_expr = expr.subs(impl_base)
-        self._cb = se.lambdify(weights,
+        self._cb = sp.lambdify(weights,
                                [expr.subs(get_parameters())],
                                modules="numpy")
 
@@ -138,7 +150,7 @@ class LumpedApproximation:
             return self._cb([kwargs[w] for w in self._weights])
 
 
-class InnerProduct(se.Expr):
+class InnerProduct(sp.Expr):
     """ An unevaluated Inner Product on L2
 
     Args:
@@ -157,11 +169,12 @@ class InnerProduct(se.Expr):
 
         # construct integrals over remaining coordinates
         # TODO .coeff seems to have problems with conjugate
-        # exp = sp.conjugate(left) * right
-        exp = left * right
+        kernel = left * right
+        # kernel = sp.conjugate(left) * right
         for dim in variables:
-            exp = sp.Integral(exp, (dim, bounds[0], bounds[1]))
-        return exp
+            xab = (dim, bounds[0], bounds[1])
+            kernel = FakeIntegral(kernel, xab)
+        return kernel
 
     @property
     def left(self):
@@ -173,6 +186,22 @@ class InnerProduct(se.Expr):
 
     def doit(self, **hints):
         pass
+
+
+class FakeIntegral(sp.Integral):
+    """
+    Placeholder class that looks like an Integral but won't try to integrate
+    anything.
+
+    Instances of this object will later be used to perform numerical integration
+    where possible.
+    """
+
+    def doit(self, **hints):
+        """
+        Do not try to integrate anything, just perform operations on the args
+        """
+        return self.func(*[arg.doit() for arg in self.args])
 
 
 class Lagrange1stOrder(sp.Piecewise):
@@ -233,39 +262,20 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     """
     Create a lumped approximation of a distributed variable
     """
+    base = get_base(base_lbl)
+    ess_bcs, nat_bcs, boundary_positions = _classify_boundaries(
+        sym,
+        boundary_conditions)
 
-    boundary_positions = []
-    ess_bcs = []
-    nat_bcs = []
     ess_pairs = []
     ess_idxs = []
-
-    base = get_base(base_lbl)
-
-    # identify essential and natural boundaries
-    for cond in boundary_conditions:
-        lhs = cond.args[0]
-        expr = lhs.args[0]
-        assert sym in lhs.args[1]
-        assert len(lhs.args[2]) == 1
-        # extract the position where the dirichlet condition is given
-        pos = next(iter(lhs.args[2]))
-        boundary_positions.append(pos)
-        pair = (cond, pos)
-
-        if isinstance(expr, sp.Derivative):
-            # only dirichlet boundaries require extra work
-            nat_bcs.append(pair)
-        else:
-            ess_bcs.append(pair)
-
     # find the corresponding functions for the essential boundaries
     for cond, pos in ess_bcs:
         # identify all base fractions that differ from zero
         for idx, func in enumerate(base):
             if isinstance(func, Function):
                 res = func(pos)
-            elif isinstance(func, se.Basic):
+            elif isinstance(func, sp.Basic):
                 res = func.subs(sym, pos)
             else:
                 raise NotImplementedError
@@ -289,7 +299,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     x_ess = 0
     for cond, func in ess_pairs:
         d_func = get_function(sym)
-        x_ess += cond.rhs * d_func
+        x_ess += cond[1] * d_func
         base_mapping[d_func] = func, True
 
     # extract shape functions which are to be kept
@@ -310,6 +320,39 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     return x_approx
 
 
+def _classify_boundaries(sym, boundary_conditions):
+    """ Identify essential and natural boundaries
+    """
+    boundary_positions = []
+    ess_bcs = []
+    nat_bcs = []
+    for cond in boundary_conditions:
+        lhs_idx = next((idx for idx, arg in enumerate(cond.args)
+                        if _field_var_letter in str(arg.atoms(sp.Function))))
+        lhs = cond.args[lhs_idx]
+        rhs = cond.args[1 - lhs_idx]
+        if isinstance(lhs, sp.Subs):
+            assert sym in lhs.args[1]
+            assert len(lhs.args[2]) == 1
+            pos = next(iter(lhs.args[2]))
+            expr = lhs.args[0]
+        else:
+            # go f*ck yourself symengine
+            raise NotImplementedError
+
+        pair = ((lhs, rhs), pos)
+
+        if isinstance(expr, sp.Derivative):
+            nat_bcs.append(pair)
+        else:
+            ess_bcs.append(pair)
+
+        boundary_positions.append(pos)
+
+
+    return ess_bcs, nat_bcs, boundary_positions
+
+
 def create_hom_func(sym, pos_a, pos_b, mode="linear"):
     r"""
     Build a symbolic expression for homogenisation purposes.
@@ -328,11 +371,11 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
 
     """
     if mode == "linear":
-        variables = se.symbols("_m _n")
+        variables = sp.symbols("_m _n")
         _f = variables[0]*sym + variables[1]
     elif mode == "trig":
-        variables = se.symbols("_a _b")
-        _f = se.cos(variables[0]*sym + variables[1])
+        variables = sp.symbols("_a _b")
+        _f = sp.cos(variables[0] * sym + variables[1])
     # elif mode == "exp":
     #     variables = sp.symbols("_c _b")
     #     _f = sp.cos(variables[0]*sym + variables[1])
@@ -340,7 +383,7 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
         raise NotImplementedError
 
     eqs = [_f.subs(pos_a) - 1, _f.subs(pos_b - 0)]
-    sol = se.solve(eqs, variables, dict=True)[0]
+    sol = sp.solve(eqs, variables, dict=True)[0]
     res = _f.subs(sol)
 
     return res
@@ -357,14 +400,14 @@ def substitute_approximations(weak_form, mapping):
         return wrapped_func
 
     def gen_func_subs_pair(func, expr):
-        if isinstance(func, se.Function):
+        if isinstance(func, sp.Function):
             a = func.func
             args = func.args
-        elif isinstance(func, se.Subs):
+        elif isinstance(func, sp.Subs):
             a = func
-            if isinstance(func.args[0], se.Derivative):
+            if isinstance(func.args[0], sp.Derivative):
                 args = func.args[0].args[0].args
-            elif isinstance(func.args[0], se.Function):
+            elif isinstance(func.args[0], sp.Function):
                 args = func.args[0].args
             else:
                 raise NotImplementedError
@@ -387,14 +430,8 @@ def substitute_approximations(weak_form, mapping):
     rep_eqs = []
     for eq in tqdm(ext_form):
         rep_eq = eq
-        for pair in tqdm(rep_list):
-            # print("Substituting pair:")
-            # print(pair)
-            rep_eq = rep_eq.replace(*pair)
-            # if u1_t in rep_eq.atoms(sp.Function):
-            # print(rep_eq.atoms(sp.Derivative))
-            # print("Result:")
-            # print(rep_eq)
+        for pair in rep_list:
+            rep_eq = rep_eq.replace(*pair, simultaneous=True)
 
         rep_eqs.append(rep_eq.doit())
 
@@ -440,3 +477,55 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
             mappings[_f] = expr
 
     return new_eqs, mappings
+
+
+def create_first_order_system(weak_form):
+    # collect derivatives
+    temp_derivatives = set()
+    for eq in weak_form:
+        t_ders = [der for der in eq.atoms(sp.Derivative) if der.args[1] == time]
+        temp_derivatives.update(t_ders)
+
+    # replace functions with dummies
+    new_forms = weak_form
+    new_mapping = {}
+    new_targets = set()
+    for der in temp_derivatives:
+        new_forms, mapping, targets = _substitute_temporal_derivative(new_forms, der)
+        new_mapping.update(mapping)
+        new_targets.update(targets)
+
+    print(targets)
+    # solve for targets
+    # sol_dict = sp.solve(new_forms, targets)
+
+    return new_forms
+
+
+def _substitute_temporal_derivative(weak_forms, derivative):
+
+    subs_list = []
+    target_set = set()
+
+    expr = derivative.args[0]
+    order = len(derivative.args) - 1
+
+    d_der = sp.Dummy()
+    subs_pair = (derivative, d_der)
+    if _weight_letter in str(expr) and order > 1 \
+            or _input_letter in str(expr) and order > 0:
+        new_deriv = derivative.func(*derivative.args[:-1])
+        new_eq = new_deriv - d_der
+        weak_forms.append(new_eq)
+        weak_forms, new_s_list, new_t_set = _substitute_temporal_derivative(
+            weak_forms,
+            new_deriv)
+        subs_list += new_s_list
+        target_set.update(new_t_set)
+
+    if _weight_letter in str(expr) and order == 1:
+        target_set.add(d_der)
+    subs_list.append(subs_pair)
+    new_forms = [form.subs(subs_list) for form in weak_forms]
+
+    return new_forms, subs_list, target_set

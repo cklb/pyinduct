@@ -1,6 +1,5 @@
 import pickle
 import sympy as sp
-# from sympy.physics.quantum.innerproduct import InnerProduct
 
 import pyinduct as pi
 import pyinduct.sym_simulation as ss
@@ -55,7 +54,7 @@ ss.register_parameters(*param_list)
 # define boundaries
 boundaries_x1 = [
     sp.Eq(sp.Subs(x1_zt.diff(z), z, 0), -(gamma_t - Gamma[0]) / k[0] * u1_t),
-    # se.Eq(se.Subs(x1_zt, z, 0), u1_t),
+    # se.Eq(se.Subs(x, z, 0), u1_t),
     sp.Eq(sp.Subs(x1_zt, z, 1), Tm),
 ]
 boundaries_x2 = [
@@ -133,7 +132,7 @@ rep_eqs = ss.substitute_approximations(equations, rep_dict)
 print(rep_eqs)
 
 sys = ss.create_first_order_system(rep_eqs)
-print(sys)
+# print(sys)
 quit()
 
 

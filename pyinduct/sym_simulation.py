@@ -9,7 +9,7 @@ from time import clock
 from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
 import numpy as np
-from tqdm import tqdm
+# from tqdm import tqdm
 
 from .registry import get_base
 from .core import Domain, Function
@@ -428,7 +428,8 @@ def substitute_approximations(weak_form, mapping):
 
     # substitute formulations
     rep_eqs = []
-    for eq in tqdm(ext_form):
+    # for eq in tqdm(ext_form):
+    for eq in ext_form:
         rep_eq = eq
         for pair in rep_list:
             rep_eq = rep_eq.replace(*pair, simultaneous=True)
@@ -495,7 +496,8 @@ def create_first_order_system(weak_form):
         new_mapping.update(mapping)
         new_targets.update(targets)
 
-    print(targets)
+    print(new_targets)
+    print(new_mapping)
     # solve for targets
     # sol_dict = sp.solve(new_forms, targets)
 

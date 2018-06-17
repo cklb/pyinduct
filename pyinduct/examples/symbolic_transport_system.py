@@ -28,7 +28,7 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries = [
-    sp.Eq(sp.Subs(x, z, 0), u),
+    sp.Eq(sp.Subs(x.diff(z), z, 0), u),
 ]
 
 # define approximation basis
@@ -56,4 +56,4 @@ rep_eqs = ss.substitute_approximations(weak_form, rep_dict)
 sp.pprint(rep_eqs)
 
 sys = ss.create_first_order_system(rep_eqs)
-sp.pprint(sys, num_columns=200)
+# sp.pprint(sys, num_columns=200)

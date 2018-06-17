@@ -6,6 +6,8 @@ from copy import copy
 import sympy as sp
 # import symengine as sp
 from time import clock
+from mpmath import quad
+# from sympy.mpmath import quad
 from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
 import numpy as np
@@ -114,12 +116,12 @@ class LumpedApproximation:
         self._bcs = bcs
 
         # substitute all known functions and symbols and generate callback
-        impl_base = [(key, implemented_function(key.func, val)(*key.args))
-                     for key, val in base_map.items()]
-        impl_expr = expr.subs(impl_base)
-        self._cb = sp.lambdify(weights,
-                               [expr.subs(get_parameters())],
-                               modules="numpy")
+        # impl_base = [(key, implemented_function(key.func, val)(*key.args))
+        #              for key, val in base_map.items()]
+        # impl_expr = expr.subs(impl_base)
+        # self._cb = sp.lambdify(weights,
+        #                        [impl_expr.subs(get_parameters())],
+        #                        modules="numpy")
 
     @property
     def expression(self):
@@ -299,6 +301,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
     x_ess = 0
     for cond, func in ess_pairs:
         d_func = get_function(sym)
+        d_func.func._imp_ = staticmethod(func)
         x_ess += cond[1] * d_func
         base_mapping[d_func] = func, True
 
@@ -311,6 +314,7 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
         weights = get_weights(len(nat_funcs))
     for idx, func in enumerate(nat_funcs):
         d_func = get_function(sym)
+        d_func.func._imp_ = staticmethod(func)
         x_nat += weights[idx] * d_func
         base_mapping[d_func] = func, False
 
@@ -348,7 +352,6 @@ def _classify_boundaries(sym, boundary_conditions):
             ess_bcs.append(pair)
 
         boundary_positions.append(pos)
-
 
     return ess_bcs, nat_bcs, boundary_positions
 
@@ -417,16 +420,19 @@ def substitute_approximations(weak_form, mapping):
         b = wrap_expr(expr, *args)
         return a, b
 
-    # create substitution list
+    # create substitution lists
     rep_list = []
+    # subs_list = []
     for sym, approx in ext_mapping.items():
         if isinstance(approx, LumpedApproximation):
             rep_list.append(gen_func_subs_pair(sym, approx.expression))
             rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
+            # subs_list += [implemented_function(key.func, func)(*key.args)
+            #               for key, (func, flag) in approx.base_map.items()]
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
-    # substitute formulations
+    # substitute symbolic approximations
     rep_eqs = []
     # for eq in tqdm(ext_form):
     for eq in ext_form:
@@ -435,6 +441,9 @@ def substitute_approximations(weak_form, mapping):
             rep_eq = rep_eq.replace(*pair, simultaneous=True)
 
         rep_eqs.append(rep_eq.doit())
+
+    # substitute callbacks
+    # impl_expr = expr.subs(impl_base)
 
     return rep_eqs
 
@@ -473,38 +482,53 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     mappings = {}
     for expr in expressions:
         if equation.atoms(symbol):
-            _f = get_test_function(*symbol.args)
-            new_eqs.append(equation.replace(symbol, _f))
-            mappings[_f] = expr
+            _g = get_test_function(*symbol.args)
+            _g.func._imp_ = staticmethod(expr)
+            new_eqs.append(equation.replace(symbol, _g))
+            mappings[_g] = expr
 
     return new_eqs, mappings
 
 
 def create_first_order_system(weak_forms):
+
     temp_derivatives = _find_derivatives(weak_forms, time)
 
     new_forms = weak_forms[:]
+    subs_list = []
+    targets = set()
     for der in temp_derivatives:
-        new_forms, subs_list, new_targets = _convert_higher_derivative(new_forms, der)
+        new_forms, subs_pairs, target_set = _convert_higher_derivative(new_forms, der)
+        subs_list += subs_pairs
+        targets.update(target_set)
 
-    # replace functions with dummies
-    for der in temp_derivatives:
-        new_forms, mapping, targets = _substitute_temporal_derivative(new_forms, der)
-        new_mapping.update(mapping)
-        new_targets.update(targets)
+    print(targets)
+    print(subs_list)
+    print(new_forms)
 
-    print(new_targets)
-    print(new_mapping)
+    # solve integrals
+    simp_forms = _solve_integrals(new_forms)
+
     # solve for targets
-    # sol_dict = sp.solve(new_forms, targets)
+    sol_dict = sp.solve(new_forms, targets)
+    print(sol_dict)
 
     return new_forms
 
 
-def _find_derivatives(weak_form, sym):
+def _find_integrals(weak_forms):
+    """ Find fake integrals """
+    integrals = set()
+    for eq in weak_forms:
+        ints = [_int for _int in eq.atoms(FakeIntegral)]
+        integrals.update(ints)
+
+    return integrals
+
+def _find_derivatives(weak_forms, sym):
     """ Find derivatives """
     temp_derivatives = set()
-    for eq in weak_form:
+    for eq in weak_forms:
         t_ders = [der for der in eq.atoms(sp.Derivative) if der.args[1] == sym]
         # pairs = [()]
         temp_derivatives.update(t_ders)
@@ -527,33 +551,33 @@ def _convert_higher_derivative(weak_forms, derivative):
             # -> c1_dd = c2_d
             # -> c2_d = ...
             new_var = get_weight()
-            new_deriv = derivative.func(*derivative.args[:-1])
-            new_eq = new_var - new_deriv
-            new_forms = [form.subs(derivative, new_var.diff(time))
+            red_deriv = derivative.func(*derivative.args[:-1])
+            new_eq = new_var - red_deriv
+            new_der = new_var.diff(time)
+            new_forms = [form.subs(derivative, new_der)
                          for form in weak_forms]
             new_forms.append(new_eq)
-            if order > 2:
-                new_forms, subs_list, target_set = _convert_higher_derivative(
-                    new_forms, new_deriv)
+
+            # replace remaining derivative
+            new_forms, subs_pairs, new_targets = _convert_higher_derivative(
+                new_forms, red_deriv)
+            subs_list += subs_pairs
+            target_set.update(new_targets)
+
+            # replace newly introduced one
+            new_forms, subs_pairs, new_targets = _convert_higher_derivative(
+                new_forms, new_der)
+            subs_list += subs_pairs
+            target_set.update(new_targets)
         else:
             d_der = sp.Dummy()
-            subs_pair = derivative, d_der
-            subs_list.append(subs_pair)
+            subs_pairs = [(derivative, d_der)]
+            new_forms = [form.subs(subs_pairs) for form in weak_forms]
+            subs_list += subs_pairs
             target_set.add(d_der)
+
     elif _input_letter in str(expr):
-        # u1_d = ...
-        # v = u1_d
-        # -> v_d = u1_dd
-        # -> c2_d = ...
-        new_var = get_weight()
-        new_deriv = derivative.func(*derivative.args[:-1])
-        new_eq = new_var - new_deriv
-        new_forms = [form.subs(derivative, new_var.diff(time))
-                     for form in weak_forms]
-        new_forms.append(new_eq)
-        if order > 2:
-            new_forms, subs_list, target_set = _convert_higher_derivative(
-                new_forms, new_deriv)
+        raise NotImplementedError
 
     return new_forms, subs_list, target_set
 
@@ -576,7 +600,7 @@ def _substitute_temporal_derivative(weak_forms, derivative):
         new_deriv = derivative.func(*derivative.args[:-1])
         new_eq = new_var - new_deriv
         weak_forms.append(new_eq)
-        subs_pair = (derivative, new_var.diff(t))
+        subs_pair = (derivative, new_var.diff(time))
         weak_forms, new_s_list, new_t_set = _substitute_temporal_derivative(
             weak_forms,
             new_deriv)
@@ -584,7 +608,7 @@ def _substitute_temporal_derivative(weak_forms, derivative):
         target_set.update(new_t_set)
 
     if _input_letter in str(expr) and order > 0:
-        pass
+        raise NotImplementedError
 
     if _weight_letter in str(expr) and order == 1:
         target_set.add(d_der)
@@ -592,3 +616,28 @@ def _substitute_temporal_derivative(weak_forms, derivative):
     new_forms = [form.subs(subs_list) for form in weak_forms]
 
     return new_forms, subs_list, target_set
+
+
+def _solve_integrals(weak_forms):
+
+    exp_forms = [f.expand() for f in weak_forms]
+    integrals = _find_integrals(exp_forms)
+
+    subs_list = []
+    for integral in integrals:
+        # 1st build real integral and try solving that
+        r_int = sp.integrate(integral.args[0], integral.args[1])
+        print(r_int)
+        continue
+        kernel = integral.args[0]
+        # try to factor weights and dummies
+
+        xab = integral.args[1]
+        print(kernel.atoms(sp.Symbol))
+        res = quad(kernel, *xab[1:])
+        subs_list.append(integral, res)
+
+    print(subs_list)
+    simp_forms = [form.subs(subs_list) for form in weak_forms]
+
+    return simp_forms

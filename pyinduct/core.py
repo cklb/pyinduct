@@ -774,7 +774,7 @@ def domain_intersection(first, second):
         second (set): (Set of) tuples defining the second domain.
 
     Return:
-        set: Intersection given by (start, end) tuples.
+        Set:  Intersection given by (start, end) tuples.
     """
     if isinstance(first, tuple):
         first = [first]
@@ -847,7 +847,7 @@ def integrate_function(func, interval):
 
     Args:
         func(callable): Function to integrate.
-        interval(list of tuples): List of (start, end) values of the intervals
+        interval(set of tuples): Set of (start, end) values of the intervals
             to integrate on.
 
     Return:

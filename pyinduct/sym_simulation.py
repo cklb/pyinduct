@@ -6,15 +6,18 @@ from copy import copy
 import sympy as sp
 # import symengine as sp
 from time import clock
-from mpmath import quad
+from scipy.integrate import quad
+# from mpmath import quad
 # from sympy.mpmath import quad
 from sympy.utilities.lambdify import implemented_function
 from sympy.functions.special.polynomials import jacobi
 import numpy as np
 # from tqdm import tqdm
 
+from matplotlib import pyplot as plt
+
 from .registry import get_base
-from .core import Domain, Function
+from .core import Domain, Function, domain_intersection, integrate_function
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -95,16 +98,28 @@ def get_test_function(*symbols):
     return g
 
 
-_input_cnt = 0
+_lambda_cnt = 0
 _input_letter = "_u"
 
 
 def get_input():
-    global _input_cnt
-    u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
+    global _lambda_cnt
+    u = sp.Function("{}_{}".format(_input_letter, _lambda_cnt),
                     real=True)(time)
-    _input_cnt += 1
+    _lambda_cnt += 1
     return u
+
+
+# _lambda_cnt = 0
+# _lambda_letter = "_l"
+
+
+# def get_lambda():
+#     global _lambda_cnt
+#     u = sp.Function("{}_{}".format(_lambda_letter, _lambda_cnt),
+#                     real=True)(time)
+#     _lambda_cnt += 1
+#     return u
 
 
 class LumpedApproximation:
@@ -204,6 +219,36 @@ class FakeIntegral(sp.Integral):
         Do not try to integrate anything, just perform operations on the args
         """
         return self.func(*[arg.doit() for arg in self.args])
+
+    def eval_numerically(self):
+        # build callback
+        kernel, (sym, a, b) = self.args
+        f = sp.lambdify(sym, kernel, modules="numpy")
+
+        # extract domains
+        domain = {(float(a), float(b))}
+        nonzero = domain
+        for func in kernel.atoms(sp.Function):
+            if hasattr(func, "_imp_"):
+                new_dom = func._imp_.domain
+                domain = domain_intersection(domain, new_dom)
+                nonzero = domain_intersection(nonzero, func._imp_.nonzero)
+
+        interval = domain_intersection(domain, nonzero)
+
+        # perform integration
+        if interval:
+            if 1:
+                reg = next(iter(interval))
+                x_vals = np.linspace(float(a), float(b))
+                plt.plot(x_vals, f(x_vals).T)
+                plt.axhline(xmin=reg[0], xmax=reg[1], c="r")
+                plt.show()
+
+            res, err = integrate_function(f, interval)
+        else:
+            res = 0
+        return res
 
 
 class Lagrange1stOrder(sp.Piecewise):
@@ -492,28 +537,54 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
 
 def create_first_order_system(weak_forms):
 
-    temp_derivatives = _find_derivatives(weak_forms, time)
+    derivatives = _find_derivatives(weak_forms, time)
+    derivatives.update(_find_derivatives(weak_forms, space))
 
     new_forms = weak_forms[:]
     subs_list = []
     targets = set()
-    for der in temp_derivatives:
-        new_forms, subs_pairs, target_set = _convert_higher_derivative(new_forms, der)
+    for der in derivatives:
+        new_forms, subs_pairs, target_set = _convert_higher_derivative(
+            new_forms, der)
         subs_list += subs_pairs
         targets.update(target_set)
 
-    print(targets)
-    print(subs_list)
-    print(new_forms)
+    # sort targets
+    def _find_entry(entry):
+        return next((a for a, b in subs_list if b == entry))
+
+    sorted_targets = sorted(targets, key=lambda x: str(_find_entry(x)))
+    # print(targets)
+    # print(subs_list)
+    # print(new_forms)
+
+    # substitute weights with dummies
+    state_elems = set()
+    for form in new_forms:
+        funcs = form.atoms(sp.Function)
+        for f in funcs:
+            if _weight_letter in str(f):
+                state_elems.add(f)
+    sorted_state = sorted(state_elems, key=lambda x: str(x))
+    state_mapping = [(state, sp.Dummy()) for state in sorted_state]
+    new_forms = [form.subs(state_mapping) for form in new_forms]
+
+    # simplify integrals
+    new_forms = _simplify_integrals(new_forms)
+    sp.pprint(new_forms)
 
     # solve integrals
-    simp_forms = _solve_integrals(new_forms)
+    new_forms = _solve_integrals(new_forms)
+    sp.pprint(new_forms)
 
     # solve for targets
-    sol_dict = sp.solve(new_forms, targets)
-    print(sol_dict)
+    sol_dict = sp.solve(new_forms, sorted_targets)
+    sp.pprint(sol_dict)
 
-    return new_forms
+    # build statespace form
+    ss_form = sp.Matrix([sol_dict[target] for target in sorted_targets])
+
+    return ss_form, subs_list
 
 
 def _find_integrals(weak_forms):
@@ -525,15 +596,18 @@ def _find_integrals(weak_forms):
 
     return integrals
 
+
 def _find_derivatives(weak_forms, sym):
     """ Find derivatives """
-    temp_derivatives = set()
-    for eq in weak_forms:
-        t_ders = [der for der in eq.atoms(sp.Derivative) if der.args[1] == sym]
-        # pairs = [()]
-        temp_derivatives.update(t_ders)
+    if isinstance(sym, sp.Symbol):
+        sym = set([sym])
 
-    return temp_derivatives
+    derivatives = set()
+    for eq in weak_forms:
+        ders = {der for der in eq.atoms(sp.Derivative) if der.args[1] in sym}
+        derivatives.update(ders)
+
+    return derivatives
 
 
 def _convert_higher_derivative(weak_forms, derivative):
@@ -579,65 +653,72 @@ def _convert_higher_derivative(weak_forms, derivative):
     elif _input_letter in str(expr):
         raise NotImplementedError
 
+    elif _function_letter in str(expr) or _test_function_letter in str(expr):
+        # derive the associated callbacks
+        if _function_letter in str(expr):
+            d_func = get_function(*expr.args)
+
+        elif _test_function_letter in str(expr):
+            d_func = get_test_function(*expr)
+
+        callback = expr.func._imp_
+        d_func.func._imp_ = staticmethod(callback.derive(order))
+        subs_pair = derivative, d_func
+        new_forms = [form.replace(*subs_pair) for form in weak_forms]
+        subs_list += [subs_pair]
+
     return new_forms, subs_list, target_set
 
 
-def _substitute_temporal_derivative(weak_forms, derivative):
+def _simplify_integrals(weak_forms):
+
+    integrals = _find_integrals(weak_forms)
 
     subs_list = []
-    target_set = set()
+    for integral in integrals:
+        red_int = _reduce_kernel(integral)
+        subs_list.append((integral, red_int))
 
-    expr = derivative.args[0]
-    order = len(derivative.args) - 1
-
-    d_der = sp.Dummy()
-    if _weight_letter in str(expr) and order > 1:
-        # c1_dd = ...
-        # c1_d = c2
-        # -> c1_dd = c2_d
-        # -> c2_d = ...
-        new_var = get_weight()
-        new_deriv = derivative.func(*derivative.args[:-1])
-        new_eq = new_var - new_deriv
-        weak_forms.append(new_eq)
-        subs_pair = (derivative, new_var.diff(time))
-        weak_forms, new_s_list, new_t_set = _substitute_temporal_derivative(
-            weak_forms,
-            new_deriv)
-        subs_list += new_s_list
-        target_set.update(new_t_set)
-
-    if _input_letter in str(expr) and order > 0:
-        raise NotImplementedError
-
-    if _weight_letter in str(expr) and order == 1:
-        target_set.add(d_der)
-    subs_list.append(subs_pair)
-    new_forms = [form.subs(subs_list) for form in weak_forms]
-
-    return new_forms, subs_list, target_set
+    red_forms = [f.subs(subs_list) for f in weak_forms]
+    return red_forms
 
 
 def _solve_integrals(weak_forms):
 
-    exp_forms = [f.expand() for f in weak_forms]
-    integrals = _find_integrals(exp_forms)
-
-    subs_list = []
+    solved_map = dict()
+    integrals = _find_integrals(weak_forms)
     for integral in integrals:
-        # 1st build real integral and try solving that
-        r_int = sp.integrate(integral.args[0], integral.args[1])
-        print(r_int)
-        continue
-        kernel = integral.args[0]
-        # try to factor weights and dummies
+        if integral in solved_map:
+            print("Skipping eval")
+            continue
+        if time not in integral.atoms(sp.Symbol):
+            res = integral.eval_numerically()
+            solved_map[integral] = res
+        else:
+            d_int = sp.Dummy()
 
-        xab = integral.args[1]
-        print(kernel.atoms(sp.Symbol))
-        res = quad(kernel, *xab[1:])
-        subs_list.append(integral, res)
+    subs_forms = [f.subs(solved_map) for f in weak_forms]
+    return subs_forms
 
-    print(subs_list)
-    simp_forms = [form.subs(subs_list) for form in weak_forms]
 
-    return simp_forms
+def _reduce_kernel(integral):
+    """ Move all independent terms outside the integral """
+    kernel, (sym, a, b) = integral.args
+    kernel = kernel.expand()
+    if isinstance(kernel, sp.Add):
+        new_int = sp.Add(*[_reduce_kernel(FakeIntegral(addend, (sym, a, b)))
+                           for addend in kernel.args])
+
+    elif isinstance(kernel, sp.Mul):
+        dep_args = []
+        indep_args = []
+        for arg in kernel.args:
+            if sym not in arg.atoms(sp.Symbol):
+                indep_args.append(arg)
+            else:
+                dep_args.append(arg)
+
+        new_int = sp.Mul(*indep_args) * FakeIntegral(sp.Mul(*dep_args),
+                                                     (sym, a, b))
+
+    return new_int

@@ -4,8 +4,10 @@ New simulation module approach that makes use of sympy for expression handling
 
 from copy import copy
 import sympy as sp
+from sympy.utilities.autowrap import ufuncify
 # import symengine as sp
 from time import clock
+from scipy.integrate import solve_ivp
 from scipy.integrate import quad
 # from mpmath import quad
 # from sympy.mpmath import quad
@@ -17,7 +19,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from .registry import get_base
-from .core import Domain, Function, domain_intersection, integrate_function
+from .core import (Domain, Function, Base, domain_intersection, integrate_function,
+                   project_on_base, EvalData)
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -124,23 +127,22 @@ def get_input():
 
 class LumpedApproximation:
 
-    def __init__(self, expr, weights, base_map, bcs):
-        self._expr = expr
+    def __init__(self, symbols, ess_expr, nat_expr, weights, base_map, bcs):
+        self._syms = symbols
+        self._ess_expr = ess_expr
+        self._nat_expr = nat_expr
         self._weights = weights
         self._base_map = base_map
         self._bcs = bcs
 
         # substitute all known functions and symbols and generate callback
-        # impl_base = [(key, implemented_function(key.func, val)(*key.args))
-        #              for key, val in base_map.items()]
-        # impl_expr = expr.subs(impl_base)
-        # self._cb = sp.lambdify(weights,
-        #                        [impl_expr.subs(get_parameters())],
-        #                        modules="numpy")
+        self._cb = sp.lambdify(self._syms + self.weights,
+                               self.expression.subs(get_parameters()),
+                               modules="numpy")
 
     @property
     def expression(self):
-        return self._expr
+        return self._ess_expr + self._nat_expr
 
     @property
     def weights(self):
@@ -162,9 +164,25 @@ class LumpedApproximation:
 
     def __call__(self, *args, **kwargs):
         if args:
-            return self._cb(args)
+            return self._cb(*args)
         if kwargs:
-            return self._cb([kwargs[w] for w in self._weights])
+            return self._cb(*[kwargs[w] for w in self._weights])
+
+    def approximate_function(self, func):
+        """
+        Project the given function into the subspace of this Approximation
+
+        Args:
+            func(sp.Function): Function expression to approximate
+        """
+        hom_func = (func - self._ess_expr).subs(get_parameters())
+        cb = sp.lambdify(hom_func.free_symbols, hom_func)
+        weights = project_on_base(Function(cb), Base(self.base))
+        return weights
+
+    def get_spatial_approx(self, weights):
+        expr = self.expression.subs(list(zip(self.weights, weights))).subs(get_parameters())
+        return sp.lambdify(self._syms, expr, modules="numpy")
 
 
 class InnerProduct(sp.Expr):
@@ -238,7 +256,7 @@ class FakeIntegral(sp.Integral):
 
         # perform integration
         if interval:
-            if 1:
+            if 0:
                 reg = next(iter(interval))
                 x_vals = np.linspace(float(a), float(b))
                 plt.plot(x_vals, f(x_vals).T)
@@ -363,8 +381,11 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
         x_nat += weights[idx] * d_func
         base_mapping[d_func] = func, False
 
-    x_comp = x_ess + x_nat
-    x_approx = LumpedApproximation(x_comp, weights, base_mapping, boundary_conditions)
+    x_approx = LumpedApproximation([sym],
+                                   x_ess, x_nat,
+                                   weights,
+                                   base_mapping,
+                                   boundary_conditions)
 
     return x_approx
 
@@ -470,8 +491,8 @@ def substitute_approximations(weak_form, mapping):
     # subs_list = []
     for sym, approx in ext_mapping.items():
         if isinstance(approx, LumpedApproximation):
-            rep_list.append(gen_func_subs_pair(sym, approx.expression))
             rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
+            rep_list.append(gen_func_subs_pair(sym, approx.expression))
             # subs_list += [implemented_function(key.func, func)(*key.args)
             #               for key, (func, flag) in approx.base_map.items()]
         else:
@@ -529,7 +550,8 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
         if equation.atoms(symbol):
             _g = get_test_function(*symbol.args)
             _g.func._imp_ = staticmethod(expr)
-            new_eqs.append(equation.replace(symbol, _g))
+            # new_eqs.append(equation.replace(symbol, _g))
+            new_eqs.append(equation.replace(symbol.func, _g.func))
             mappings[_g] = expr
 
     return new_eqs, mappings
@@ -566,8 +588,10 @@ def create_first_order_system(weak_forms):
             if _weight_letter in str(f):
                 state_elems.add(f)
     sorted_state = sorted(state_elems, key=lambda x: str(x))
-    state_mapping = [(state, sp.Dummy()) for state in sorted_state]
-    new_forms = [form.subs(state_mapping) for form in new_forms]
+
+    # substitute inputs with dummies
+    inputs = _find_inputs(new_forms)
+    sorted_inputs = sorted(inputs, key=lambda x: str(x))
 
     # simplify integrals
     new_forms = _simplify_integrals(new_forms)
@@ -577,6 +601,9 @@ def create_first_order_system(weak_forms):
     new_forms = _solve_integrals(new_forms)
     sp.pprint(new_forms)
 
+    # subs parameters
+    new_forms = [form.subs(get_parameters()) for form in new_forms]
+
     # solve for targets
     sol_dict = sp.solve(new_forms, sorted_targets)
     sp.pprint(sol_dict)
@@ -584,7 +611,18 @@ def create_first_order_system(weak_forms):
     # build statespace form
     ss_form = sp.Matrix([sol_dict[target] for target in sorted_targets])
 
-    return ss_form, subs_list
+    return ss_form, sorted_state, sorted_inputs
+
+
+def _find_inputs(weak_forms):
+    """ Find system inputs """
+    inputs = set()
+    for eq in weak_forms:
+        _inputs = [_inp for _inp in eq.atoms(sp.Function)
+                  if _input_letter in str(_inp)]
+        inputs.update(_inputs)
+
+    return inputs
 
 
 def _find_integrals(weak_forms):
@@ -720,5 +758,56 @@ def _reduce_kernel(integral):
 
         new_int = sp.Mul(*indep_args) * FakeIntegral(sp.Mul(*dep_args),
                                                      (sym, a, b))
+    else:
+        new_int = int
 
     return new_int
+
+
+def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
+    """
+    Simulate an ODE system given its right-hand side
+
+    """
+    # build expressions
+    input_mapping = {inp: sp.Dummy() for inp in inputs}
+    state_mapping = {state: sp.Dummy() for state in state}
+    subs_map = {**input_mapping, **state_mapping}
+    dummy_rhs = sp.Matrix([eq.subs(subs_map) for eq in rhs_expr])
+
+    args = [[input_mapping[inp] for inp in inputs],
+            [state_mapping[st] for st in state]]
+    rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
+
+    rhs_jac = dummy_rhs.jacobian(args[1])
+    jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
+
+    def _rhs(t, y):
+        u = [input_dict[inp](t, y) for inp in inputs]
+        y_dt = np.ravel(rhs_cb(u, y))
+        return y_dt
+
+    def _jac(t, y):
+        u = [input_dict[inp](t, y) for inp in inputs]
+        jac = jac_cb(u, y)
+        return jac
+
+    # build initial state
+    init_weights = dict()
+    for key, val in ics.items():
+        _weight_set = key.approximate_function(val)
+        new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
+        init_weights.update(new_d)
+
+    y0 = [init_weights[lbl] for lbl in state]
+
+    # simulate
+    res = solve_ivp(_rhs, time_dom.bounds, y0,
+                    jac=_jac,
+                    method="BDF")
+
+    return res
+
+    # data = EvalData(input_data=res.t, output_data=res.y)
+
+    # return data

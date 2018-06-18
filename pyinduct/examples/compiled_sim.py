@@ -19,11 +19,10 @@ print(rhs_vec)
 
 rhs_cb = sp.lambdify(args=[inputs, state], expr=rhs_vec, modules="numpy")
 jac_cb = sp.lambdify(args=[inputs, state], expr=rhs_jac, modules="numpy")
-# cb = ufuncify([inputs, state], rhs_vec, backend="numpy")
 
-# q_dt = cb(np.array([0, 0]), np.array([0, 0, 0, 0, .5]))
-# q_dt = cb(np.array([0, 0]), np.array([-1, -1, 1, 1, .5]))
-# print(q_dt)
+q_dt = rhs_cb(np.array([0 for entry in inputs]),
+              np.array([0 for entry in state]))
+print(q_dt)
 
 
 def inputs(t):

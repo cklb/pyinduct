@@ -655,12 +655,17 @@ def create_first_order_system(weak_forms):
     new_forms = _simplify_integrals(new_forms)
     sp.pprint(new_forms)
 
-    # solve integrals
-    new_forms = _solve_integrals(new_forms)
+    # again substitute converted derivatives
+    new_forms = [form.subs(subs_list) for form in new_forms]
     sp.pprint(new_forms)
 
     # subs parameters
     new_forms = [form.subs(get_parameters()) for form in new_forms]
+    sp.pprint(new_forms)
+
+    # solve integrals
+    new_forms = _solve_integrals(new_forms)
+    sp.pprint(new_forms)
 
     # solve for targets
     sol_dict = sp.solve(new_forms, sorted_targets)
@@ -810,6 +815,9 @@ def _solve_integrals(weak_forms):
 def _reduce_kernel(integral):
     """ Move all independent terms outside the integral """
     kernel, (sym, a, b) = integral.args
+    if time not in kernel.free_symbols:
+        return integral
+
     kernel = kernel.expand()
     if isinstance(kernel, sp.Add):
         new_int = sp.Add(*[_reduce_kernel(FakeIntegral(addend, (sym, a, b)))
@@ -825,18 +833,36 @@ def _reduce_kernel(integral):
                 dep_args.append(arg)
 
         if not indep_args:
-            prob_args = {arg for arg in dep_args if time in arg.free_symbols}
-            if not prob_args:
+            bad_args = {arg for arg in dep_args if time in arg.free_symbols}
+            if not bad_args:
                 return FakeIntegral(kernel, (sym, a, b))
             else:
-                print("We got a problem")
+                arg_map = {arg: _expand_term(arg, sym) for arg in bad_args}
+            dep_args = [arg.subs(arg_map) for arg in dep_args]
+            new_kernel = sp.Mul(*dep_args).subs(arg_map)
+        else:
+            new_kernel = sp.Mul(*dep_args)
 
-        new_part = _reduce_kernel(FakeIntegral(sp.Mul(*dep_args), (sym, a, b)))
+        new_part = _reduce_kernel(FakeIntegral(new_kernel, (sym, a, b)))
         new_int = sp.Mul(*indep_args) * new_part
     else:
         raise NotImplementedError
 
     return new_int
+
+
+def _expand_term(term, sym):
+    ser = sp.series(term, sym, n=2)
+    new_ser = ser.func(*[arg for arg in ser.args
+                         if not isinstance(arg, sp.Order)])
+    dummies = ser.atoms(sp.Dummy)
+    for dummy in dummies:
+        new_ser = new_ser.replace(dummy, sym, simultaneous=True)
+    # sp.pprint(ser, num_columns=200)
+    # res = sp.separatevars(exp_sym, time)
+    # sp.pprint(res, num_columns=200)
+    # quit()
+    return new_ser
 
 
 def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):

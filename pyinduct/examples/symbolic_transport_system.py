@@ -11,14 +11,15 @@ temp_dom = pi.Domain((0, 5), num=100)
 
 # spatial domain
 spat_bounds = (0, 1)
-spat_dom = pi.Domain(spat_bounds, num=10)
+spat_dom = pi.Domain(spat_bounds, num=100)
 
 # define temporal and spatial variables
 t = ss.time
 z = ss.space[0]
 
 # define system inputs
-u = ss.get_input()
+u1 = ss.get_input()
+u2 = ss.get_input()
 
 # define symbols of spatially distributed and lumped system variables
 x = ss.get_field_variable(z, t)
@@ -33,8 +34,8 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries = [
-    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0]), 0),
-    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1]), 0),
+    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0]), -u1),
+    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1]), u2),
 ]
 
 # define approximation basis
@@ -61,7 +62,8 @@ if 0:
 weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds)
     - alpha * ((x.diff(z)*phi_k).subs(z, 1) - (x.diff(z)*phi_k).subs(z, 0)
-           - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
+               - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
+    # - ss.InnerProduct(sp.exp(x), phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 
@@ -86,28 +88,20 @@ ic_dict = {
 
 
 def controller(t, weights):
-    # return weights[-1]
-    return 0
+    return np.cos(t)
+    # return weights[0]
+    # return 0
 
 
 input_dict = {
-    u: controller
+    u1: controller,
+    u2: controller
 }
 np.seterr(under="warn")
 res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
                                       inputs, state)
 
-if 0:
-    f, ax2 = plt.subplots(1, 1)
-    for idx, point in enumerate(res_weights.y):
-        ax2.plot(res_weights.t, point, label="T_{}".format(idx))
-    ax2.legend()
-    ax2.grid()
-    plt.show()
-
 weight_dict = ss._sort_weights(res_weights.y, state, [x_approx])
-
-temp_dom = pi.Domain(points=res_weights.t)
 results = ss._evaluate_approximations(weight_dict, [x_approx], temp_dom, spat_dom)
 
 win = pi.PgAnimatedPlot(results)

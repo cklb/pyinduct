@@ -186,7 +186,8 @@ class LumpedApproximation:
 
 
 class InnerProduct(sp.Expr):
-    """ An unevaluated Inner Product on L2
+    """
+    An Inner Product on L2
 
     Args:
         a: Left Operand .
@@ -225,11 +226,12 @@ class InnerProduct(sp.Expr):
 
 class FakeIntegral(sp.Integral):
     """
-    Placeholder class that looks like an Integral but won't try to integrate
-    anything.
+    Placeholder class that looks like an Integral
 
-    Instances of this object will later be used to perform numerical integration
-    where possible.
+    The difference is that this class but won't try to integrate anything
+    if not directly told to do so. Using this approach, integral expression
+    can be handled and simplified more easily, until eventually they are
+    solved numerically.
     """
 
     def doit(self, **hints):
@@ -265,6 +267,7 @@ class FakeIntegral(sp.Integral):
 
             res, err = integrate_function(f, interval)
         else:
+            # kernel is zero on the whole domain
             res = 0
         return res
 
@@ -323,10 +326,36 @@ def create_lag1ast_base(sym, bounds, num):
     return funcs
 
 
-def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
+def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     """
     Create a lumped approximation of a distributed variable
+
+    The approximation is performed as a product-ansatz using the functions
+    registered under *base_lbl*. If essential boundaries are detected, they
+    are homogenized, leading to a possible reduction of free weights in the
+    resulting approximation.
+
+    Args:
+        syms((list of) Symbol(s)): Symbol(s) to use for approximation.
+            (Dimension to discretise)
+        base_lbl(str): Label of the base to use
+        boundary_conditions(list): List of boundary conditions that have to be
+            met by the approximation.
+
+    Keyword Args:
+        weights(list): If provided, weight symbols to use for the approximation.
+            By default (None), a new set of weights will be created.
+
+    Returns:
+        LumpedApproximation: Object holding all information about the
+        approximation.
     """
+    if isinstance(syms, sp.Basic):
+        syms = [syms]
+
+    if len(syms) > 1:
+        raise NotImplementedError("Higher dimensional cases are still missing")
+    sym = syms[0]
     base = get_base(base_lbl)
     ess_bcs, nat_bcs, boundary_positions = _classify_boundaries(
         sym,
@@ -391,8 +420,28 @@ def create_approximation(sym, base_lbl, boundary_conditions, weights=None):
 
 
 def _classify_boundaries(sym, boundary_conditions):
-    """ Identify essential and natural boundaries
     """
+    Identify essential and natural boundaries
+
+    Since Dirichlet boundaries have to be handled different, this function takes
+    a list of Equation objects and classifies their type into essential
+    (dirichlet) and natural (neumann or robin) boundary conditions.
+
+    Note:
+        For the detection to work, substitutions must not have been performed.
+        Therefore, create expression like `Subs(x(z,t), z, 0)` in favour of
+        `x(z,t).subs(z, 0)`.
+        However, using symengine this will also fail.
+
+    Args:
+        sym(Symbol): Symbol, specifying the coordinate to classify for.
+        boundary_conditions(list): List of equations, defining the boundaries.
+
+    Returns:
+        3-tuple of essential boundaries, natural boundaries and all boundary
+        positions.
+    """
+    # TODO: Pass placeholder expr and directly search for that
     boundary_positions = []
     ess_bcs = []
     nat_bcs = []
@@ -459,8 +508,23 @@ def create_hom_func(sym, pos_a, pos_b, mode="linear"):
 
 
 def substitute_approximations(weak_form, mapping):
+    """
+    Substitute placeholder functions with their approximations
 
-    ext_form, ext_mapping = expand_kth_terms(weak_form, mapping)
+    Firstly, all testfunctions are substituted, by adding a new equation for
+    every provided entity. Afterwards, the approximations for all other symbols
+    are performed.
+
+    Args:
+        weak_form (list): List of sympy expression, representing the weak
+            formulation of a system.
+        mapping (dict): Dict holding the substitution mappings
+
+    Returns:
+        Extended equation system with substituted mapping.
+    """
+
+    ext_form, ext_mapping = _expand_kth_terms(weak_form, mapping)
 
     def wrap_expr(expr, *sym):
         def wrapped_func(*_sym):
@@ -493,8 +557,6 @@ def substitute_approximations(weak_form, mapping):
         if isinstance(approx, LumpedApproximation):
             rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
             rep_list.append(gen_func_subs_pair(sym, approx.expression))
-            # subs_list += [implemented_function(key.func, func)(*key.args)
-            #               for key, (func, flag) in approx.base_map.items()]
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
@@ -508,19 +570,26 @@ def substitute_approximations(weak_form, mapping):
 
         rep_eqs.append(rep_eq.doit())
 
-    # substitute callbacks
-    # impl_expr = expr.subs(impl_base)
-
     return rep_eqs
 
 
-def expand_kth_terms(weak_form, mapping):
-    """ Search for kth terms and expand the equation system by their mappings"""
+def _expand_kth_terms(weak_form, mapping):
+    """
+    Search for kth terms and expand the equation system by their mappings
 
+    For now, a *k-th term* is recognized by its placeholder function being
+    a test function. Since in the weak form, it acts as a placeholder for all
+    test functions, an equation is added to the equation system for every entry
+    in the value, belonging to a test-function key.
+
+    Therefore, having one equation with two *k-th terms* and a mapping assigning
+    10 function to each of them, yo will end up with 100 equations.
+    """
     new_exprs = []
     new_mapping = {}
     kth_placeholders = {}
-    # search for kth placeholders (by now given by testfunctions)
+
+    # search for kth placeholders
     for sym, approx in mapping.items():
         if _test_function_letter in str(sym):
             kth_placeholders[sym] = approx
@@ -572,24 +641,13 @@ def create_first_order_system(weak_forms):
         targets.update(target_set)
 
     # sort targets
-    def _find_entry(entry):
-        return next((a for a, b in subs_list if b == entry))
+    sorted_targets = sorted(targets, key=lambda x: str(x))
 
-    sorted_targets = sorted(targets, key=lambda x: str(_find_entry(x)))
-    # print(targets)
-    # print(subs_list)
-    # print(new_forms)
-
-    # substitute weights with dummies
-    state_elems = set()
-    for form in new_forms:
-        funcs = form.atoms(sp.Function)
-        for f in funcs:
-            if _weight_letter in str(f):
-                state_elems.add(f)
+    # identify state components
+    state_elems = _find_weights(new_forms)
     sorted_state = sorted(state_elems, key=lambda x: str(x))
 
-    # substitute inputs with dummies
+    # identify inputs
     inputs = _find_inputs(new_forms)
     sorted_inputs = sorted(inputs, key=lambda x: str(x))
 
@@ -612,6 +670,16 @@ def create_first_order_system(weak_forms):
     ss_form = sp.Matrix([sol_dict[target] for target in sorted_targets])
 
     return ss_form, sorted_state, sorted_inputs
+
+
+def _find_weights(new_forms):
+    state_elems = set()
+    for form in new_forms:
+        funcs = form.atoms(sp.Function)
+        for f in funcs:
+            if _weight_letter in str(f):
+                state_elems.add(f)
+    return state_elems
 
 
 def _find_inputs(weak_forms):
@@ -682,11 +750,8 @@ def _convert_higher_derivative(weak_forms, derivative):
             subs_list += subs_pairs
             target_set.update(new_targets)
         else:
-            d_der = sp.Dummy()
-            subs_pairs = [(derivative, d_der)]
-            new_forms = [form.subs(subs_pairs) for form in weak_forms]
-            subs_list += subs_pairs
-            target_set.add(d_der)
+            new_forms = weak_forms
+            target_set.add(derivative)
 
     elif _input_letter in str(expr):
         raise NotImplementedError
@@ -729,11 +794,14 @@ def _solve_integrals(weak_forms):
         if integral in solved_map:
             print("Skipping eval")
             continue
-        if time not in integral.atoms(sp.Symbol):
-            res = integral.eval_numerically()
+        if time in integral.free_symbols:
+            res = sp.integrate(integral.args[0], integral.args[1])
+            if space in res.free_symbols:
+                raise ValueError
             solved_map[integral] = res
         else:
-            d_int = sp.Dummy()
+            res = integral.eval_numerically()
+            solved_map[integral] = res
 
     subs_forms = [f.subs(solved_map) for f in weak_forms]
     return subs_forms
@@ -751,15 +819,22 @@ def _reduce_kernel(integral):
         dep_args = []
         indep_args = []
         for arg in kernel.args:
-            if sym not in arg.atoms(sp.Symbol):
+            if sym not in arg.free_symbols:
                 indep_args.append(arg)
             else:
                 dep_args.append(arg)
 
-        new_int = sp.Mul(*indep_args) * FakeIntegral(sp.Mul(*dep_args),
-                                                     (sym, a, b))
+        if not indep_args:
+            prob_args = {arg for arg in dep_args if time in arg.free_symbols}
+            if not prob_args:
+                return FakeIntegral(kernel, (sym, a, b))
+            else:
+                print("We got a problem")
+
+        new_part = _reduce_kernel(FakeIntegral(sp.Mul(*dep_args), (sym, a, b)))
+        new_int = sp.Mul(*indep_args) * new_part
     else:
-        new_int = int
+        raise NotImplementedError
 
     return new_int
 
@@ -802,15 +877,14 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     y0 = [init_weights[lbl] for lbl in state]
 
     # simulate
-    res = solve_ivp(_rhs, time_dom.bounds, y0,
+    res = solve_ivp(fun=_rhs,
+                    y0=y0,
+                    t_span=time_dom.bounds,
+                    t_eval=time_dom.points,
                     jac=_jac,
                     method="BDF")
 
     return res
-
-    # data = EvalData(input_data=res.t, output_data=res.y)
-
-    # return data
 
 
 def _sort_weights(weights, state, approximations):

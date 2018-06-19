@@ -619,7 +619,7 @@ def _find_inputs(weak_forms):
     inputs = set()
     for eq in weak_forms:
         _inputs = [_inp for _inp in eq.atoms(sp.Function)
-                  if _input_letter in str(_inp)]
+                   if _input_letter in str(_inp)]
         inputs.update(_inputs)
 
     return inputs
@@ -697,7 +697,7 @@ def _convert_higher_derivative(weak_forms, derivative):
             d_func = get_function(*expr.args)
 
         elif _test_function_letter in str(expr):
-            d_func = get_test_function(*expr)
+            d_func = get_test_function(*expr.args)
 
         callback = expr.func._imp_
         d_func.func._imp_ = staticmethod(callback.derive(order))
@@ -811,3 +811,54 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     # data = EvalData(input_data=res.t, output_data=res.y)
 
     # return data
+
+
+def _sort_weights(weights, state, approximations):
+    """ Coordinate a given weight set with approximations """
+    weight_dict = dict()
+    for approx in approximations:
+        a_lbls = approx.weights
+        a_weights = []
+        for lbl in a_lbls:
+            idx = state.index(lbl)
+            a_weights.append(weights[idx])
+
+        weight_dict[approx] = np.array(a_weights)
+
+    return weight_dict
+
+
+def _evaluate_approximations(weight_dict, approximations, temp_dom, spat_doms):
+    """
+    Evaluate approximations on the given grids
+
+
+    """
+    if isinstance(spat_doms, Domain):
+        spat_doms = [spat_doms]
+
+    results = []
+    all_coords = [dom.points for dom in spat_doms]
+    all_coords.append(np.array(range(len(temp_dom))))
+    all_dims = [len(dom) for dom in all_coords]
+    grids = np.meshgrid(*all_coords, indexing="ij")
+    r_grids = [grid.ravel() for grid in grids]
+
+    for approx in approximations:
+        weight_mat = weight_dict[approx]
+        temp_dim = weight_mat.shape[0]
+        args = np.zeros(len(grids) - 1 + temp_dim)
+        res = np.zeros(len(r_grids[0]))
+        for coord_idx in range(len(r_grids[0])):
+            # fill spatial parameters
+            args[:-temp_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
+            args[-temp_dim:] = weight_mat[:, r_grids[-1][coord_idx]]
+            res[coord_idx] = approx(*args)
+
+        # per convention the time axis comes first
+        out_data = np.moveaxis(res.reshape(all_dims), -1, 0)
+        data = EvalData(input_data=[temp_dom] + spat_doms,
+                        output_data=out_data)
+        results.append(data)
+
+    return results

@@ -679,7 +679,7 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
             if isinstance(expr, Function):
                 _g.func._imp_ = staticmethod(expr)
             else:
-                mappings[symbol] = expr
+                mappings[_g] = expr
 
             r_tpl = symbol.func, _g.func
             new_eqs.append(equation.replace(*r_tpl))
@@ -855,7 +855,8 @@ def _simplify_integrals(weak_forms):
     subs_list = []
     for integral in integrals:
         red_int = _reduce_kernel(integral)
-        subs_list.append((integral, red_int))
+        if integral != red_int:
+            subs_list.append((integral, red_int))
 
     red_forms = [f.subs(subs_list) for f in weak_forms]
     return red_forms
@@ -939,7 +940,8 @@ def _reduce_kernel(integral):
         new_part = _reduce_kernel(FakeIntegral(new_kernel, (sym, a, b)))
         new_int = sp.Mul(*indep_args) * new_part
     else:
-        raise NotImplementedError
+        print("Unable to handle '{}'".format(kernel))
+        return FakeIntegral(kernel, (sym, a, b))
 
     return new_int
 

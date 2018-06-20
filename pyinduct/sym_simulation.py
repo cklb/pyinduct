@@ -628,10 +628,51 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
 
 def create_first_order_system(weak_forms):
 
-    derivatives = _find_derivatives(weak_forms, time)
-    derivatives.update(_find_derivatives(weak_forms, space))
+    # identify inputs
+    inputs = _find_inputs(weak_forms)
+    sorted_inputs = sorted(inputs, key=lambda x: str(x))
 
-    new_forms = weak_forms[:]
+    # identify state components
+    state_elems = _find_weights(weak_forms)
+    sorted_state = sorted(state_elems, key=lambda x: str(x))
+
+    # simplify integrals
+    new_forms = _simplify_integrals(weak_forms)
+    # sp.pprint(new_forms, num_columns=200)
+
+    # substitute derivatives
+    new_forms, targets = _convert_derivatives(new_forms)
+    # sp.pprint(new_forms, num_columns=200)
+
+    # subs parameters
+    new_forms = [form.subs(get_parameters()) for form in new_forms]
+    # sp.pprint(new_forms, num_columns=200)
+
+    # solve integrals
+    new_forms = _solve_integrals(new_forms)
+    # sp.pprint(new_forms, num_columns=200)
+
+    # run remaining evaluations
+    new_forms = [form.doit() for form in new_forms]
+
+    # solve for targets
+    sol_dict = sp.solve(new_forms, targets)
+
+    # build statespace form
+    ss_form = sp.Matrix([sol_dict[target] for target in targets])
+    # sp.pprint(ss_form)
+
+    return ss_form, sorted_state, sorted_inputs
+
+
+def _convert_derivatives(new_forms):
+    all_symbols = set()
+    for f in new_forms:
+        all_symbols.update(f.atoms(sp.Symbol))
+    derivatives = _find_derivatives(new_forms, all_symbols)
+
+    # derivatives = _find_derivatives(new_forms, time)
+    # derivatives.update(_find_derivatives(new_forms, space))
     subs_list = []
     targets = set()
     for der in derivatives:
@@ -639,42 +680,7 @@ def create_first_order_system(weak_forms):
             new_forms, der)
         subs_list += subs_pairs
         targets.update(target_set)
-
-    # sort targets
-    sorted_targets = sorted(targets, key=lambda x: str(x))
-
-    # identify state components
-    state_elems = _find_weights(new_forms)
-    sorted_state = sorted(state_elems, key=lambda x: str(x))
-
-    # identify inputs
-    inputs = _find_inputs(new_forms)
-    sorted_inputs = sorted(inputs, key=lambda x: str(x))
-
-    # simplify integrals
-    new_forms = _simplify_integrals(new_forms)
-    sp.pprint(new_forms)
-
-    # again substitute converted derivatives
-    new_forms = [form.subs(subs_list) for form in new_forms]
-    sp.pprint(new_forms)
-
-    # subs parameters
-    new_forms = [form.subs(get_parameters()) for form in new_forms]
-    sp.pprint(new_forms)
-
-    # solve integrals
-    new_forms = _solve_integrals(new_forms)
-    sp.pprint(new_forms)
-
-    # solve for targets
-    sol_dict = sp.solve(new_forms, sorted_targets)
-    sp.pprint(sol_dict)
-
-    # build statespace form
-    ss_form = sp.Matrix([sol_dict[target] for target in sorted_targets])
-
-    return ss_form, sorted_state, sorted_inputs
+    return new_forms, targets
 
 
 def _find_weights(new_forms):
@@ -682,7 +688,7 @@ def _find_weights(new_forms):
     for form in new_forms:
         funcs = form.atoms(sp.Function)
         for f in funcs:
-            if _weight_letter in str(f):
+            if _weight_letter in str(f) and f.args[0] == time:
                 state_elems.add(f)
     return state_elems
 
@@ -711,7 +717,7 @@ def _find_integrals(weak_forms):
 def _find_derivatives(weak_forms, sym):
     """ Find derivatives """
     if isinstance(sym, sp.Symbol):
-        sym = set([sym])
+        sym = {sym}
 
     derivatives = set()
     for eq in weak_forms:
@@ -801,7 +807,7 @@ def _solve_integrals(weak_forms):
             continue
         if time in integral.free_symbols:
             res = sp.integrate(integral.args[0], integral.args[1])
-            if space in res.free_symbols:
+            if res.free_symbols.intersection(tuple(space)):
                 raise ValueError
             solved_map[integral] = res
         else:
@@ -827,7 +833,7 @@ def _reduce_kernel(integral):
         dep_args = []
         indep_args = []
         for arg in kernel.args:
-            if sym not in arg.free_symbols:
+            if sym not in arg.atoms(sp.Symbol):
                 indep_args.append(arg)
             else:
                 dep_args.append(arg)
@@ -855,9 +861,9 @@ def _expand_term(term, sym):
     ser = sp.series(term, sym, n=2)
     new_ser = ser.func(*[arg for arg in ser.args
                          if not isinstance(arg, sp.Order)])
-    dummies = ser.atoms(sp.Dummy)
-    for dummy in dummies:
-        new_ser = new_ser.replace(dummy, sym, simultaneous=True)
+    # dummies = ser.atoms(sp.Dummy)
+    # for dummy in dummies:
+    #     new_ser = new_ser.replace(dummy, sym, simultaneous=True)
     # sp.pprint(ser, num_columns=200)
     # res = sp.separatevars(exp_sym, time)
     # sp.pprint(res, num_columns=200)

@@ -1,4 +1,5 @@
 import sympy as sp
+# import symengine as sp
 import numpy as np
 import pyinduct as pi
 import pyinduct.sym_simulation as ss
@@ -34,8 +35,8 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries = [
-    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0]), -u1),
-    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1]), u2),
+    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -u1),
+    sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1], evaluate=False), u2),
 ]
 
 # define approximation basis
@@ -63,7 +64,7 @@ weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds)
     - alpha * ((x.diff(z)*phi_k).subs(z, 1) - (x.diff(z)*phi_k).subs(z, 0)
                - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
-    # - ss.InnerProduct(sp.exp(x), phi_k, spat_bounds)
+    - ss.InnerProduct(sp.exp(x), phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 
@@ -74,7 +75,7 @@ rep_dict = {
 }
 
 rep_eqs = ss.substitute_approximations(weak_form, rep_dict)
-sp.pprint(rep_eqs, num_columns=200)
+# sp.pprint(rep_eqs, num_columns=200)
 
 sys, state, inputs = ss.create_first_order_system(rep_eqs)
 sp.pprint(inputs)

@@ -402,8 +402,11 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     # inhomogeneous parts that are to be excluded
     x_ess = 0
     for cond, func in ess_pairs:
-        d_func = get_function(sym)
-        d_func.func._imp_ = staticmethod(func)
+        if isinstance(func, Function):
+            d_func = get_function(sym)
+            d_func.func._imp_ = staticmethod(func)
+        else:
+            d_func = func
         x_ess += cond[1] * d_func
         base_mapping[d_func] = func, True
 
@@ -415,8 +418,11 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     if weights is None:
         weights = get_weights(len(nat_funcs))
     for idx, func in enumerate(nat_funcs):
-        d_func = get_function(sym)
-        d_func.func._imp_ = staticmethod(func)
+        if isinstance(func, Function):
+            d_func = get_function(sym)
+            d_func.func._imp_ = staticmethod(func)
+        else:
+            d_func = func
         x_nat += weights[idx] * d_func
         base_mapping[d_func] = func, False
 
@@ -628,10 +634,13 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     for expr in expressions:
         if equation.atoms(symbol):
             _g = get_test_function(*symbol.args)
-            _g.func._imp_ = staticmethod(expr)
-            # new_eqs.append(equation.replace(symbol, _g))
-            new_eqs.append(equation.replace(symbol.func, _g.func))
-            mappings[_g] = expr
+            if isinstance(expr, Function):
+                _g.func._imp_ = staticmethod(expr)
+            else:
+                mappings[symbol] = expr
+
+            r_tpl = symbol.func, _g.func
+            new_eqs.append(equation.replace(*r_tpl))
 
     return new_eqs, mappings
 
@@ -835,7 +844,24 @@ def _solve_integrals(weak_forms):
 
 
 def _reduce_kernel(integral):
-    """ Move all independent terms outside the integral """
+    """
+    Move all independent terms outside the integral's kernel
+
+    To reach this goal, firstly the kernel is expanded and split. Afterwards,
+    independent term are moved aside. If the kernel still contains unknown
+    expressions (such as weights and their derivatives) they are expanded into
+    a taylor series and separated afterwards.
+    The last step is only performed if `enable_approx` is `True` .
+
+    Args:
+        integral(FakeIntegral): Integral whose kernel is to be simplified.
+
+    Returns:
+        Sum of simplified integrals.
+
+    """
+    approx = get_parameter("enable_approx")
+
     kernel, (sym, a, b) = integral.args
     if time not in kernel.free_symbols:
         return integral
@@ -859,12 +885,15 @@ def _reduce_kernel(integral):
             if not bad_args:
                 return FakeIntegral(kernel, (sym, a, b))
             else:
-                arg_map = {arg: _approximate_term(arg, sym) for arg in bad_args}
-            dep_args = [arg.subs(arg_map) for arg in dep_args]
-            new_kernel = sp.Mul(*dep_args).subs(arg_map)
-        else:
-            new_kernel = sp.Mul(*dep_args)
+                if approx:
+                    arg_map = {arg: _approximate_term(arg, sym)
+                               for arg in bad_args}
+                else:
+                    return FakeIntegral(kernel, (sym, a, b))
 
+            dep_args = [arg.subs(arg_map) for arg in dep_args]
+
+        new_kernel = sp.Mul(*dep_args)
         new_part = _reduce_kernel(FakeIntegral(new_kernel, (sym, a, b)))
         new_int = sp.Mul(*indep_args) * new_part
     else:
@@ -874,16 +903,23 @@ def _reduce_kernel(integral):
 
 
 def _approximate_term(term, sym):
-    pos = get_parameter("approx_pos")
+    """
+    Series expansion of unseparable terms
+
+    Args:
+        term: Term to expand.
+        sym: Coordinate to expand.
+
+    Returns:
+        Taylor expansion of the highest order supported by the involved
+        function expressions.
+    """
     n = get_parameter("approx_order")
-    for _n in range(n):
-        # TODO acquire the available derivative order instead of doing this
-        try:
-            ser = sp.series(term, x=sym, x0=pos, n=_n).removeO()
-        except ValueError:
-            continue
-        break
-    warnings.warn("Approximating term {} with order n={}".format(term, n))
+    pos = get_parameter("approx_pos")
+
+    warnings.warn("Approximating term {} at {}={} with order n={}".format(
+        term, sym, pos, n))
+    ser = sp.series(term, x=sym, x0=pos, n=n).removeO()
     return ser
 
 

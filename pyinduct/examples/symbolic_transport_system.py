@@ -6,7 +6,7 @@ import pyinduct.sym_simulation as ss
 from matplotlib import pyplot as plt
 
 # approximation order
-N = 5
+N = 3
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -32,8 +32,9 @@ phi_k = ss.get_test_function(z)
 alpha = sp.symbols("alpha", real=True)
 param_list = [
     (alpha, .1),
+    ("enable_approx", True),
     ("approx_pos", .5),
-    ("approx_order", 5),
+    ("approx_order", 2),
 ]
 ss.register_parameters(*param_list)
 
@@ -63,30 +64,38 @@ if 0:
     plt.plot(vals, a(vals))
     plt.show()
 
-# define the variational formulation for both phases
+# some spatial dependent coefficients
+# a0 = sp.sin(z)
+
+# some variants for nonlinearities
 # a0 = 0
 # a0 = (1 + 10 * x)
-a0 = x**2
+# a0 = x**2
+a0 = sp.exp(x)
 # a0 = 2*x**2 + sp.exp(x)
 
+# define the variational formulation for both phases
 weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds)
     - alpha * ((x.diff(z)*phi_k).subs(z, 1)
                - (x.diff(z)*phi_k).subs(z, 0)
                - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
-    - ss.InnerProduct(a0 * x, phi_k, spat_bounds)  # some nasty scale for source
+    - ss.InnerProduct(a0 * x, phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 
+# define which symbol shall be approximated by which approximation
 x_test = x_approx.base
 rep_dict = {
     x: x_approx,
     phi_k: x_test,
 }
 
+# create full system of equations
 rep_eqs = ss.substitute_approximations(weak_form, rep_dict)
 # sp.pprint(rep_eqs, num_columns=200)
 
+# transform into generalised state-space form
 sys, state, inputs = ss.create_first_order_system(rep_eqs)
 sp.pprint(inputs)
 sp.pprint(state)
@@ -99,10 +108,12 @@ if 0:
     eigs = np.linalg.eigvals(A)
     print(eigs)
 
+# define the initial conditions for each approximation
 ic_dict = {
     x_approx: x0
 }
 
+# define the system inputs and their mapping
 
 def controller(t, weights):
     """ Top notch boundary feedback """
@@ -115,6 +126,8 @@ input_dict = {
     u1: controller,
     u2: controller
 }
+
+# run the simulation
 np.seterr(under="warn")
 res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
                                       inputs, state)

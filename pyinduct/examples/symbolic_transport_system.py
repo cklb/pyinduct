@@ -45,8 +45,12 @@ boundaries = [
 ]
 
 # define approximation basis
-nodes = pi.Domain(spat_bounds, num=N)
-fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
+if 0:
+    nodes = pi.Domain(spat_bounds, num=N)
+    fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
+else:
+    fem_base = ss.create_lag1st_base(z, spat_bounds, N)
+
 pi.register_base("fem", fem_base)
 
 # create approximations, homogenizing where needed

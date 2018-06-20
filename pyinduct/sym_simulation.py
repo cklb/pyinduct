@@ -125,6 +125,48 @@ def get_input():
 #     return u
 
 
+def build_lag1st(sym, start, mid, end):
+    if start == mid:
+        obj = sp.Piecewise((0, sym < mid),
+                           (1 - (sym - mid)/(end - mid), sym < end),
+                           (0, sym >= end)
+                           )
+    elif mid == end:
+        obj = sp.Piecewise((0, sym < start),
+                           ((sym - start)/(mid - start), sym <= mid),
+                           (0, sym > mid)
+                           )
+    else:
+        obj = sp.Piecewise((0, sym < start),
+                           ((sym - start)/(mid - start), sym < mid),
+                           (1, sym == mid),
+                           (1 - (sym - mid)/(end - mid), sym < end),
+                           (0, sym >= end)
+                           )
+    return obj
+
+
+def create_lag1st_base(sym, bounds, num):
+    # define base vectors
+    nodes = Domain(bounds, num)
+    funcs = [build_lag1st(sym, *nodes[[0, 0, 1]])]
+    for idx in range(1, num-1):
+        funcs.append(build_lag1st(sym, *nodes[[idx-1, idx, idx+1]]))
+    funcs += [build_lag1st(sym, *nodes[[-2, -1, -1]])]
+
+    if 0:
+        # plotting of Piecewise fails really bad, so lambdify first
+        fig = plt.figure()
+        vals = np.linspace(0, 1, num=1e3)
+        for f in funcs:
+            fn = sp.lambdify(z, f, modules="numpy")
+            res = fn(vals)
+            plt.plot(vals, res)
+        plt.show()
+
+    return funcs
+
+
 class LumpedApproximation:
 
     def __init__(self, symbols, ess_expr, nat_expr, weights, base_map, bcs):

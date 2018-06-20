@@ -6,7 +6,7 @@ import pyinduct.sym_simulation as ss
 from matplotlib import pyplot as plt
 
 # approximation order
-N = 3
+N = 5
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -30,7 +30,11 @@ phi_k = ss.get_test_function(z)
 
 # define parameters
 alpha = sp.symbols("alpha", real=True)
-param_list = [(alpha, .1)]
+param_list = [
+    (alpha, .1),
+    ("approx_pos", .5),
+    ("approx_order", 5),
+]
 ss.register_parameters(*param_list)
 
 # define boundaries
@@ -48,23 +52,29 @@ pi.register_base("fem", fem_base)
 x_approx = ss.create_approximation(z, "fem", boundaries)
 
 # define initial conditions
-x0 = sp.sin(z*sp.pi)
+x0 = 1e-1 * sp.sin(z*sp.pi)
 # x0 = 10 * z
+# x0 = lambda _z: .1
+
 if 0:
+    state0 = x_approx.approximate_function(x0)
     a = x_approx.get_spatial_approx(state0)
     vals = np.linspace(*spat_bounds)
-    plt.plot(vals, np.sin(vals))
     plt.plot(vals, a(vals))
     plt.show()
-    x0 = np.sin
-    print(a(0))
 
 # define the variational formulation for both phases
+# a0 = 0
+# a0 = (1 + 10 * x)
+a0 = x**2
+# a0 = 2*x**2 + sp.exp(x)
+
 weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds)
-    - alpha * ((x.diff(z)*phi_k).subs(z, 1) - (x.diff(z)*phi_k).subs(z, 0)
+    - alpha * ((x.diff(z)*phi_k).subs(z, 1)
+               - (x.diff(z)*phi_k).subs(z, 0)
                - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
-    - ss.InnerProduct(sp.exp(x), phi_k, spat_bounds)
+    - ss.InnerProduct(a0 * x, phi_k, spat_bounds)  # some nasty scale for source
 ]
 sp.pprint(weak_form, num_columns=200)
 
@@ -82,6 +92,12 @@ sp.pprint(inputs)
 sp.pprint(state)
 sp.pprint(sys, num_columns=200)
 
+if 0:
+    A, b = sp.linear_eq_to_matrix(sys, *state)
+    A = np.array(A).astype(float)
+    print(A)
+    eigs = np.linalg.eigvals(A)
+    print(eigs)
 
 ic_dict = {
     x_approx: x0
@@ -89,9 +105,10 @@ ic_dict = {
 
 
 def controller(t, weights):
-    return np.cos(t)
-    # return weights[0]
-    # return 0
+    """ Top notch boundary feedback """
+    k = 1e2
+    # k = 0
+    return -k * weights[0]
 
 
 input_dict = {
@@ -102,8 +119,10 @@ np.seterr(under="warn")
 res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
                                       inputs, state)
 
+
+t_dom = pi.Domain(points=res_weights.t)
 weight_dict = ss._sort_weights(res_weights.y, state, [x_approx])
-results = ss._evaluate_approximations(weight_dict, [x_approx], temp_dom, spat_dom)
+results = ss._evaluate_approximations(weight_dict, [x_approx], t_dom, spat_dom)
 
 win = pi.PgAnimatedPlot(results)
 pi.show()

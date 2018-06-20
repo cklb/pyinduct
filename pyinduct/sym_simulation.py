@@ -2,19 +2,15 @@
 New simulation module approach that makes use of sympy for expression handling
 """
 
-from copy import copy
-import sympy as sp
-from sympy.utilities.autowrap import ufuncify
-# import symengine as sp
 from time import clock
-from scipy.integrate import solve_ivp
-from scipy.integrate import quad
-# from mpmath import quad
-# from sympy.mpmath import quad
-from sympy.utilities.lambdify import implemented_function
-from sympy.functions.special.polynomials import jacobi
+from copy import copy
+import warnings
+import sympy as sp
+# import symengine as sp
+from sympy.utilities.autowrap import ufuncify
 import numpy as np
-# from tqdm import tqdm
+from scipy.integrate import solve_ivp
+from tqdm import tqdm
 
 from matplotlib import pyplot as plt
 
@@ -37,6 +33,10 @@ def register_parameters(*args, **kwargs):
 
     if kwargs:
         _parameters.update(kwargs)
+
+
+def get_parameter(param):
+    return _parameters.get(param, None)
 
 
 def get_parameters(*args):
@@ -175,8 +175,18 @@ class LumpedApproximation:
         Args:
             func(sp.Function): Function expression to approximate
         """
-        hom_func = (func - self._ess_expr).subs(get_parameters())
-        cb = sp.lambdify(hom_func.free_symbols, hom_func)
+        if isinstance(func, sp.Basic):
+            hom_func = (func - self._ess_expr).subs(get_parameters())
+            cb = sp.lambdify(hom_func.free_symbols, hom_func)
+            # else:
+            #     retval = hom_func.evalf()
+            #     def _dummy(*args):
+            #         return retval
+            #     cb = _dummy
+        else:
+            # lets hope that it is callable somehow
+            cb = func
+
         weights = project_on_base(Function(cb), Base(self.base))
         return weights
 
@@ -560,10 +570,10 @@ def substitute_approximations(weak_form, mapping):
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
-    # substitute symbolic approximations
+    print(">>> substituting symbolic approximations")
     rep_eqs = []
-    # for eq in tqdm(ext_form):
-    for eq in ext_form:
+    for eq in tqdm(ext_form):
+    # for eq in ext_form:
         rep_eq = eq
         for pair in rep_list:
             rep_eq = rep_eq.replace(*pair, simultaneous=True)
@@ -628,38 +638,41 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
 
 def create_first_order_system(weak_forms):
 
-    # identify inputs
+    print(">>> identifying inputs")
     inputs = _find_inputs(weak_forms)
     sorted_inputs = sorted(inputs, key=lambda x: str(x))
+    # sp.pprint(sorted_inputs)
 
-    # identify state components
+    print(">>> identifying state components")
     state_elems = _find_weights(weak_forms)
-    sorted_state = sorted(state_elems, key=lambda x: str(x))
+    sorted_state = sp.Matrix(sorted(state_elems, key=lambda x: str(x)))
+    # sp.pprint(sorted_state)
 
-    # simplify integrals
+    print(">>> simplifying integrals")
     new_forms = _simplify_integrals(weak_forms)
     # sp.pprint(new_forms, num_columns=200)
 
-    # substitute derivatives
+    print(">>> substituting derivatives")
     new_forms, targets = _convert_derivatives(new_forms)
     # sp.pprint(new_forms, num_columns=200)
 
-    # subs parameters
+    print(">>> substituting parameters")
     new_forms = [form.subs(get_parameters()) for form in new_forms]
     # sp.pprint(new_forms, num_columns=200)
 
-    # solve integrals
     new_forms = _solve_integrals(new_forms)
     # sp.pprint(new_forms, num_columns=200)
 
-    # run remaining evaluations
+    print(">>> running remaining evaluations")
     new_forms = [form.doit() for form in new_forms]
+    # sp.pprint(ss_form)
 
-    # solve for targets
+    print(">>> solving for targets")
     sol_dict = sp.solve(new_forms, targets)
+    # sp.pprint(ss_form)
 
-    # build statespace form
-    ss_form = sp.Matrix([sol_dict[target] for target in targets])
+    print(">>> building statespace form")
+    ss_form = sp.Matrix([sol_dict[s.diff(time)] for s in sorted_state])
     # sp.pprint(ss_form)
 
     return ss_form, sorted_state, sorted_inputs
@@ -801,7 +814,9 @@ def _solve_integrals(weak_forms):
 
     solved_map = dict()
     integrals = _find_integrals(weak_forms)
-    for integral in integrals:
+    print(">>> solving integrals")
+    # for integral in integrals:
+    for integral in tqdm(integrals):
         if integral in solved_map:
             print("Skipping eval")
             continue
@@ -814,7 +829,8 @@ def _solve_integrals(weak_forms):
             res = integral.eval_numerically()
             solved_map[integral] = res
 
-    subs_forms = [f.subs(solved_map) for f in weak_forms]
+    tqdm.write(">>> substituting the solutions")
+    subs_forms = [f.subs(solved_map) for f in tqdm(weak_forms)]
     return subs_forms
 
 
@@ -843,7 +859,7 @@ def _reduce_kernel(integral):
             if not bad_args:
                 return FakeIntegral(kernel, (sym, a, b))
             else:
-                arg_map = {arg: _expand_term(arg, sym) for arg in bad_args}
+                arg_map = {arg: _approximate_term(arg, sym) for arg in bad_args}
             dep_args = [arg.subs(arg_map) for arg in dep_args]
             new_kernel = sp.Mul(*dep_args).subs(arg_map)
         else:
@@ -857,18 +873,18 @@ def _reduce_kernel(integral):
     return new_int
 
 
-def _expand_term(term, sym):
-    ser = sp.series(term, sym, n=2)
-    new_ser = ser.func(*[arg for arg in ser.args
-                         if not isinstance(arg, sp.Order)])
-    # dummies = ser.atoms(sp.Dummy)
-    # for dummy in dummies:
-    #     new_ser = new_ser.replace(dummy, sym, simultaneous=True)
-    # sp.pprint(ser, num_columns=200)
-    # res = sp.separatevars(exp_sym, time)
-    # sp.pprint(res, num_columns=200)
-    # quit()
-    return new_ser
+def _approximate_term(term, sym):
+    pos = get_parameter("approx_pos")
+    n = get_parameter("approx_order")
+    for _n in range(n):
+        # TODO acquire the available derivative order instead of doing this
+        try:
+            ser = sp.series(term, x=sym, x0=pos, n=_n).removeO()
+        except ValueError:
+            continue
+        break
+    warnings.warn("Approximating term {} with order n={}".format(term, n))
+    return ser
 
 
 def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
@@ -878,7 +894,7 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     """
     # build expressions
     input_mapping = {inp: sp.Dummy() for inp in inputs}
-    state_mapping = {state: sp.Dummy() for state in state}
+    state_mapping = {s: sp.Dummy() for s in state}
     subs_map = {**input_mapping, **state_mapping}
     dummy_rhs = sp.Matrix([eq.subs(subs_map) for eq in rhs_expr])
 
@@ -914,7 +930,11 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
                     t_span=time_dom.bounds,
                     t_eval=time_dom.points,
                     jac=_jac,
-                    method="BDF")
+                    # method="BDF"
+                    )
+    if not res.success:
+        warnings.warn("Integration failed at t={} with '{}'".format(
+            res.t[-1], res.message))
 
     return res
 
@@ -922,11 +942,12 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
 def _sort_weights(weights, state, approximations):
     """ Coordinate a given weight set with approximations """
     weight_dict = dict()
+    state_elements = list(state)
     for approx in approximations:
         a_lbls = approx.weights
         a_weights = []
         for lbl in a_lbls:
-            idx = state.index(lbl)
+            idx = state_elements.index(lbl)
             a_weights.append(weights[idx])
 
         weight_dict[approx] = np.array(a_weights)

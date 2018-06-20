@@ -242,7 +242,8 @@ class StateSpace(object):
         if input_handles is None:
             self.input = EmptyInput(self.B[0][available_power].shape[1])
         else:
-            self.input = sanitize_input(input_handles, SimulationInput)
+            self.input = input_handles
+            # self.input = sanitize_input(input_handles, SimulationInput)
 
     # TODO export cython code?
     def rhs(self, _t, _q):
@@ -488,8 +489,8 @@ class CanonicalForm(object):
         return self._input_functions
 
     def set_input_function(self, func, index=0):
-        if not isinstance(func, SimulationInput):
-            raise TypeError("Inputs must be of type `SimulationInput`.")
+        # if not isinstance(func, SimulationInput):
+        #     raise TypeError("Inputs must be of type `SimulationInput`.")
 
         if self._input_functions is None:
             self._input_functions = np.atleast_1d(func)

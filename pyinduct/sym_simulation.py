@@ -689,16 +689,6 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
 
 def create_first_order_system(weak_forms):
 
-    print(">>> identifying inputs")
-    inputs = _find_inputs(weak_forms)
-    sorted_inputs = sorted(inputs, key=lambda x: str(x))
-    # sp.pprint(sorted_inputs)
-
-    print(">>> identifying state components")
-    state_elems = _find_weights(weak_forms)
-    sorted_state = sp.Matrix(sorted(state_elems, key=lambda x: str(x)))
-    # sp.pprint(sorted_state)
-
     print(">>> simplifying integrals")
     new_forms = _simplify_integrals(weak_forms)
     # sp.pprint(new_forms, num_columns=200)
@@ -717,6 +707,16 @@ def create_first_order_system(weak_forms):
     print(">>> running remaining evaluations")
     new_forms = [form.doit() for form in new_forms]
     # sp.pprint(ss_form)
+
+    print(">>> identifying inputs")
+    inputs = _find_inputs(weak_forms)
+    sorted_inputs = sorted(inputs, key=lambda x: str(x))
+    # sp.pprint(sorted_inputs)
+
+    print(">>> identifying state components")
+    state_elems = _find_weights(weak_forms)
+    sorted_state = sp.Matrix(sorted(state_elems, key=lambda x: str(x)))
+    # sp.pprint(sorted_state)
 
     print(">>> solving for targets")
     sol_dict = sp.solve(new_forms, targets)

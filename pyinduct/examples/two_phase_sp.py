@@ -84,12 +84,12 @@ if __name__ == "__main__" or test_examples:
     nodes, base = pi.cure_interval(pi.LagrangeFirstOrder,
                                    spat_dom.bounds,
                                    len(spat_dom))
-    red_base = base[:-1]
+    red_base = pi.Base(base[:-1])
     pi.register_base("fem_base_1", red_base)
     pi.register_base("fem_base_2", red_base)
 
-    dirichlet_frac = base[-1:]
-    pi.register_base("diri_base", dirichlet_frac)
+    dirichlet_frac = base[-1]
+    # pi.register_base("diri_base", dirichlet_frac)
 
     coll_fraction = pi.Function(lambda z: 1,
                                 domain=spat_dom.bounds,
@@ -98,6 +98,7 @@ if __name__ == "__main__" or test_examples:
     pi.register_base("coll_base", coll_base)
 
     # parameters
+    Tm = 0
     rho_m = 1  # kg/m^3
     L = 334  # kg/m^3
     rho = [0.91, 1]  # kg/m^3
@@ -109,6 +110,7 @@ if __name__ == "__main__" or test_examples:
     # sympy symbols
     u1, u2, x1, x2, gamma, z, t = sp.symbols("u1 u2 x1 x2 gamma z t")
     x_sym = [x1(z, t), x2(z, t)]
+    x_diri = implemented_function("x_d", dirichlet_frac)
     u_sym = [u1(t), u2(t)]
 
     # pyinduct placeholders
@@ -125,7 +127,6 @@ if __name__ == "__main__" or test_examples:
     x_num = [pi.FieldVariable("fem_base_{}".format(i)) for i in range(1, 3)]
     gamma_num = pi.FieldVariable("coll_base")
     psi_num = pi.TestFunction("fem_base_1")
-    psi_diri = pi.TestFunction("diri_base")
     psi_coll = pi.TestFunction("coll_base")
 
     # map sympy symbols to the corresponding base

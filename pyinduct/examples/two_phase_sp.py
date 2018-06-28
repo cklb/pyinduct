@@ -91,13 +91,13 @@ if __name__ == "__main__" or test_examples:
     dirichlet_frac = base[-1]
     # pi.register_base("diri_base", dirichlet_frac)
 
-    coll_fraction = pi.Function(lambda z: 1,
-                                domain=spat_dom.bounds,
-                                nonzero=spat_dom.bounds)
+    coll_fraction = pi.Function.from_constant(1,
+                                              domain=spat_dom.bounds,
+                                              nonzero=spat_dom.bounds)
     coll_base = pi.Base([coll_fraction])
     pi.register_base("coll_base", coll_base)
 
-    # parameters
+    # parameters (its only water)
     Tm = 0
     rho_m = 1  # kg/m^3
     L = 334  # kg/m^3
@@ -125,7 +125,7 @@ if __name__ == "__main__" or test_examples:
                                   ])
     sys_input = pi.Input(u)
     x_num = [pi.FieldVariable("fem_base_{}".format(i)) for i in range(1, 3)]
-    gamma_num = pi.FieldVariable("coll_base")
+    gamma_num = pi.FieldVariable("coll_base")(0)
     psi_num = pi.TestFunction("fem_base_1")
     psi_coll = pi.TestFunction("coll_base")
 
@@ -134,53 +134,60 @@ if __name__ == "__main__" or test_examples:
     base_var_map = {
         "fem_base_1": x1(z, t),
         "fem_base_2": x2(z, t),
-        "col_base": gamma(z, t),
+        "col_base": gamma(t),
     }
     beta = [gamma(t) - spat_dom.bounds[i] for i in range(2)]
     scale2 = 1 / (rho_m * L)
 
     # weak formulations
     weak_forms = []
-    for i in range(2):
+    for i in range(0, 2):
         scale1 = alpha[i]/beta[i]**2
         form = pi.WeakFormulation([
             pi.IntegralTerm(pi.Product(x_num[i].derive(temp_order=1), psi_num),
                             limits=spat_dom.bounds, scale=-1),
             # part. integrated 2nd order term
+            pi.SymbolicTerm(term=scale1 * x_sym[i].diff(z).subs(z, 1),
+                            test_function=psi_num(0),
+                            base_var_map=base_var_map,
+                            input_var_map=input_var_map,
+                            debug=True),
+            pi.SymbolicTerm(term=-scale1 * (-1)**i * beta[i] * u_sym[i] / k[i],
+                            test_function=psi_num(1),
+                            base_var_map=base_var_map,
+                            input_var_map=input_var_map,
+                            input=sys_input,
+                            debug=True),
             pi.SymbolicTerm(term=-scale1 * x_sym[i].diff(z),
                             test_function=psi_num.derive(1),
                             base_var_map=base_var_map,
-                            input_var_map=input_var_map),
-            pi.SymbolicTerm(term=scale1 * (-1)**i * beta[i] * u_sym[i] / k[i],
-                            test_function=psi_num(1),
-                            base_var_map=base_var_map,
-                            input_var_map=input_var_map),
-            pi.SymbolicTerm(term=-scale1 * x_sym[i].diff(z).subs(z, 0),
-                            test_function=psi_num(0),
-                            base_var_map=base_var_map,
-                            input_var_map=input_var_map),
+                            input_var_map=input_var_map,
+                            debug=True),
             # 1st order term
-            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] * x_sym[0].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] / beta[i] * x_sym[0].diff(z).subs(z, 1) / beta[i] * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
-            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] * x_sym[1].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] * x_sym[1].diff(z).subs(z, 1) / beta[i] * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
-        ], name="x_{}".format(i))
+        ], name="x_{}".format(i+1))
         weak_forms.append(form)
 
     wf_gamma = pi.WeakFormulation([
-        pi.ScalarTerm(argument=gamma_num.derive(temp_order=1)(0)),
-        pi.SymbolicTerm(term=scale2 * k[0]/beta[0] * x_sym[0].diff(z).subs(z, 1),
+        pi.ScalarTerm(argument=gamma_num.derive(temp_order=1)),
+        pi.SymbolicTerm(term=-scale2 * k[0]/beta[0] * x_sym[0].diff(z).subs(z, 1),
                         test_function=psi_coll(1),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
-        pi.SymbolicTerm(term=-scale2 * k[1]/beta[1] * x_sym[1].diff(z).subs(z, 1),
+        pi.SymbolicTerm(term=scale2 * k[1]/beta[1] * x_sym[1].diff(z).subs(z, 1),
                         test_function=psi_coll(1),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
+        # some kind of dummies, i guess
+        pi.ScalarTerm(pi.Product(pi.Input(u, index=0), psi_coll(0)), scale=0),
+        pi.ScalarTerm(pi.Product(pi.Input(u, index=1), psi_coll(0)), scale=0),
     ], name="gamma")
     weak_forms.append(wf_gamma)
 

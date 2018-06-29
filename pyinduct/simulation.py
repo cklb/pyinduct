@@ -1018,6 +1018,8 @@ def create_state_space(canonical_equations):
             return mat @ vec
         except TypeError:
             return mat * vec
+        except ValueError:
+            return mat * vec
 
     mvm = implemented_function(sp.Function("_sim_dummy_mvm"), mat_vec_mul)
 

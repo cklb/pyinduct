@@ -741,8 +741,8 @@ class SymbolicTerm(EquationTerm):
             raise NotImplementedError
 
         return term, scale, (self._get_coef_vector()[0],
-                                  self._get_input_vector(),
-                                  self.t)
+                             self._get_input_vector(),
+                             self.t)
 
     def _get_input_vector(self):
         input_vector = np.empty((len(self.input_var_map),), dtype=sp.Basic)
@@ -826,7 +826,7 @@ class SymbolicTerm(EquationTerm):
                         # does not play a role whether z is the 1st or 2nd arg
                         if expr.args[0] != self.t:
                             evaluate_at = expr.args[0]
-                        elif not self.is_lumped:
+                        elif not (self.is_lumped or len(expr.args) == 1):
                             evaluate_at = expr.args[1]
                         else:
                             evaluate_at = sp.Float(0)
@@ -869,7 +869,7 @@ class SymbolicTerm(EquationTerm):
 
         self._lambdified_term = lambdify(
             (coef_vector, self._get_input_vector(), self.t, self.z),
-            self.approx_term, modules=self.modules)
+            self.approx_term.doit(), modules=self.modules)
 
         return self.approx_term
 

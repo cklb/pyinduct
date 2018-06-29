@@ -70,17 +70,17 @@ if __name__ == "__main__" or test_examples:
                 raise NotImplementedError
 
     def initial_condition_x1(z):
-        return 0
+        return -1
 
     def initial_condition_x2(z):
-        return 0
+        return 1
 
     def initial_condition_gamma(z):
-        return 0
+        return 0.5
 
 
     # define some bases
-    spat_dom = pi.Domain((0, 1), num=10)
+    spat_dom = pi.Domain((0, 1), num=3)
     nodes, base = pi.cure_interval(pi.LagrangeFirstOrder,
                                    spat_dom.bounds,
                                    len(spat_dom))
@@ -134,7 +134,7 @@ if __name__ == "__main__" or test_examples:
     base_var_map = {
         "fem_base_1": x1(z, t),
         "fem_base_2": x2(z, t),
-        "col_base": gamma(t),
+        "coll_base": gamma(t),
     }
     beta = [gamma(t) - spat_dom.bounds[i] for i in range(2)]
     scale2 = 1 / (rho_m * L)
@@ -172,7 +172,7 @@ if __name__ == "__main__" or test_examples:
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
-        ], name="x_{}".format(i+1))
+        ], name="x_{}_pde".format(i+1))
         weak_forms.append(form)
 
     wf_gamma = pi.WeakFormulation([
@@ -188,7 +188,7 @@ if __name__ == "__main__" or test_examples:
         # some kind of dummies, i guess
         pi.ScalarTerm(pi.Product(pi.Input(u, index=0), psi_coll(0)), scale=0),
         pi.ScalarTerm(pi.Product(pi.Input(u, index=1), psi_coll(0)), scale=0),
-    ], name="gamma")
+    ], name="gamma_ode")
     weak_forms.append(wf_gamma)
 
     # initial states

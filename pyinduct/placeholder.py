@@ -723,7 +723,7 @@ class SymbolicTerm(EquationTerm):
 
         scale = self._get_scale()
 
-        lamb_term = self._get_term().doit()
+        lamb_term = self._get_term()
         if self.interpolate:
             mat, ve = self._get_vectorized_interp_term()
             term = mvm(mat, ve)
@@ -865,11 +865,11 @@ class SymbolicTerm(EquationTerm):
                         dummy = sp.symbols("_d" * tord + str(coef))
                         c_subs_list.append(
                             (der_func, dummy))
-                self.approx_term = self.approx_term.subs(c_subs_list).n()
+                self.approx_term = self.approx_term.subs(c_subs_list).doit()
 
         self._lambdified_term = lambdify(
             (coef_vector, self._get_input_vector(), self.t, self.z),
-            self.approx_term.doit(), modules=self.modules)
+            self.approx_term, modules=self.modules)
 
         return self.approx_term
 

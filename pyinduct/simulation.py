@@ -1076,7 +1076,7 @@ def create_state_space(canonical_equations):
                     coef_vec = args[0]
                     t = args[2]
 
-                sym_term_stack.append(-mvm(ce.dominant_form.e_n_pb_inv, equation).doit())
+                sym_term_stack.append(-mvm(ce.dominant_form.e_n_pb_inv, equation))
 
         temp = sst(*sym_term_stack)
 
@@ -1088,7 +1088,6 @@ def create_state_space(canonical_equations):
                                                        {"gamma": coef_vec[-1]},
                                                        ]
         )
-        sp.pprint(_lambdified_symbolic_terms)
 
         # def _stack_symbolic_terms(weights, input, time):
         #     res = np.zeros(state_space_props.size)

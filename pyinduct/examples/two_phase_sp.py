@@ -70,10 +70,10 @@ if __name__ == "__main__" or test_examples:
                 raise NotImplementedError
 
     def initial_condition_x1(z):
-        return -1
+        return -10
 
     def initial_condition_x2(z):
-        return 1
+        return 0
 
     def initial_condition_gamma(z):
         return 0.5
@@ -114,14 +114,14 @@ if __name__ == "__main__" or test_examples:
     u_sym = [u1(t), u2(t)]
 
     # pyinduct placeholders
-    u = pi.SimulationInputVector([RampTrajectory(startValue=0,
-                                                 finalValue=6.2e-2,
-                                                 stepStartTime=0.5,
-                                                 stepEndTime=1),
+    u = pi.SimulationInputVector([RampTrajectory(startValue=10,
+                                                 finalValue=10,
+                                                 stepStartTime=1,
+                                                 stepEndTime=2),
                                   RampTrajectory(startValue=0,
-                                                 finalValue=9e-2,
-                                                 stepStartTime=3,
-                                                 stepEndTime=4),
+                                                 finalValue=0,
+                                                 stepStartTime=1,
+                                                 stepEndTime=2),
                                   ])
     sys_input = pi.Input(u)
     x_num = [pi.FieldVariable("fem_base_{}".format(i)) for i in range(1, 3)]
@@ -148,12 +148,12 @@ if __name__ == "__main__" or test_examples:
                             limits=spat_dom.bounds, scale=-1),
             # part. integrated 2nd order term
             pi.SymbolicTerm(term=scale1 * x_sym[i].diff(z).subs(z, 1),
-                            test_function=psi_num(0),
+                            test_function=psi_num(1),
                             base_var_map=base_var_map,
                             input_var_map=input_var_map,
                             debug=True),
-            pi.SymbolicTerm(term=-scale1 * (-1)**i * beta[i] * u_sym[i] / k[i],
-                            test_function=psi_num(1),
+            pi.SymbolicTerm(term=-scale1 * (-(-1)**i) * beta[i] / k[i] * u_sym[i],
+                            test_function=psi_num(0),
                             base_var_map=base_var_map,
                             input_var_map=input_var_map,
                             input=sys_input,
@@ -164,11 +164,11 @@ if __name__ == "__main__" or test_examples:
                             input_var_map=input_var_map,
                             debug=True),
             # 1st order term
-            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] / beta[i] * x_sym[0].diff(z).subs(z, 1) / beta[i] * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] / beta[i] * x_sym[0].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
-            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] * x_sym[1].diff(z).subs(z, 1) / beta[i] * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] / beta[i] * x_sym[1].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
@@ -176,12 +176,12 @@ if __name__ == "__main__" or test_examples:
         weak_forms.append(form)
 
     wf_gamma = pi.WeakFormulation([
-        pi.ScalarTerm(argument=gamma_num.derive(temp_order=1)),
-        pi.SymbolicTerm(term=-scale2 * k[0]/beta[0] * x_sym[0].diff(z).subs(z, 1),
+        pi.ScalarTerm(argument=gamma_num.derive(temp_order=1), scale=scale2),
+        pi.SymbolicTerm(term=-k[0]/beta[0] * x_sym[0].diff(z).subs(z, 1),
                         test_function=psi_coll(1),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
-        pi.SymbolicTerm(term=scale2 * k[1]/beta[1] * x_sym[1].diff(z).subs(z, 1),
+        pi.SymbolicTerm(term=k[1]/beta[1] * x_sym[1].diff(z).subs(z, 1),
                         test_function=psi_coll(1),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
@@ -209,8 +209,17 @@ if __name__ == "__main__" or test_examples:
     }
 
     # simulation
-    temp_domain = pi.Domain((0, 10), num=101)
-    result = pi.simulate_systems(weak_forms, ics, temp_domain, domains)
+    temp_domain = pi.Domain((0, 1), num=101)
+    settings = dict(
+        name="lsoda",
+        # name="vode",
+        max_step=temp_domain.step,
+        # method="adams",
+        method="bdf",
+        nsteps=1e3
+    )
+    result = pi.simulate_systems(weak_forms, ics, temp_domain, domains,
+                                 settings=settings)
 
     # visualization
     win = pi.PgAnimatedPlot(result)

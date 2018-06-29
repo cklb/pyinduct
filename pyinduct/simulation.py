@@ -441,7 +441,7 @@ def get_sim_results(temp_domain, spat_domains, weights, state_space, names=None,
             labels = [state_space.base_lbl]
 
     if derivative_orders is None:
-        derivative_orders = dict([(name, (0, 0)) for name in names])
+        derivative_orders = {(name, (0, 0)) for name in names}
 
     results = []
     for nm, lbl in tqdm(zip(names, labels), file=sys.stdout,
@@ -1080,8 +1080,15 @@ def create_state_space(canonical_equations):
 
         temp = sst(*sym_term_stack)
 
-        _lambdified_symbolic_terms = lambdify(
-            (coef_vec, input_vec, t), temp, modules="numpy")
+        _lambdified_symbolic_terms = lambdify((coef_vec, input_vec, t),
+                                              temp,
+                                              # modules="sympy",
+                                              # dummify=False
+                                              modules=["numpy",
+                                                       {"gamma": coef_vec[-1]},
+                                                       ]
+        )
+        sp.pprint(_lambdified_symbolic_terms)
 
         # def _stack_symbolic_terms(weights, input, time):
         #     res = np.zeros(state_space_props.size)

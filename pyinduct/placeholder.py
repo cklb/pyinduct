@@ -723,7 +723,7 @@ class SymbolicTerm(EquationTerm):
 
         scale = self._get_scale()
 
-        lamb_term = self._get_term()
+        lamb_term = self._get_term().doit()
         if self.interpolate:
             mat, ve = self._get_vectorized_interp_term()
             term = mvm(mat, ve)

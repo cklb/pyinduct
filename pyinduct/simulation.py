@@ -1074,7 +1074,7 @@ def create_state_space(canonical_equations):
                     coef_vec = args[0]
                     t = args[2]
 
-                sym_term_stack.append(-mvm(ce.dominant_form.e_n_pb_inv, equation))
+                sym_term_stack.append(-mvm(ce.dominant_form.e_n_pb_inv, equation).doit())
 
         temp = sst(*sym_term_stack)
 

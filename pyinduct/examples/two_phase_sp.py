@@ -70,17 +70,17 @@ if __name__ == "__main__" or test_examples:
                 raise NotImplementedError
 
     def initial_condition_x1(z):
-        return -10
+        return -10 + 10*z
 
     def initial_condition_x2(z):
-        return 0
+        return 10 - 10*z
 
     def initial_condition_gamma(z):
         return 0.5
 
 
     # define some bases
-    spat_dom = pi.Domain((0, 1), num=3)
+    spat_dom = pi.Domain((0, 1), num=10)
     nodes, base = pi.cure_interval(pi.LagrangeFirstOrder,
                                    spat_dom.bounds,
                                    len(spat_dom))
@@ -114,8 +114,8 @@ if __name__ == "__main__" or test_examples:
     u_sym = [u1(t), u2(t)]
 
     # pyinduct placeholders
-    u = pi.SimulationInputVector([RampTrajectory(startValue=10,
-                                                 finalValue=10,
+    u = pi.SimulationInputVector([RampTrajectory(startValue=0,
+                                                 finalValue=0,
                                                  stepStartTime=1,
                                                  stepEndTime=2),
                                   RampTrajectory(startValue=0,

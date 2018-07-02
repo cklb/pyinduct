@@ -8,7 +8,7 @@ import pyinduct.sym_simulation as ss
 import pyqtgraph as pg
 
 # approximation order
-N = 3
+N = 5
 
 # spatial domains
 spat_dom = pi.Domain((0, .1), num=N)
@@ -44,16 +44,16 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
                                           "L",
                                           "T_m"), real=True)
 param_list = [
-    (alpha[0], 1),
-    (alpha[1], 2),
+    (alpha[0], .591/(2.05*.91)),
+    (alpha[1], 2.2/(4.19*1)),
     (Gamma[0], zb_dom[0]),
     (Gamma[1], zb_dom[1]),
-    (k[0], 1),
-    (k[1], 2),
-    (rho[0], 1),
-    (rho[1], 2),
-    (rho[2], 1.5),  # rho(Tm)
-    (L, 1),
+    (k[0], .591),
+    (k[1], 2.2),
+    (rho[0], .91),
+    (rho[1], 1),
+    (rho[2], 1),  # rho(Tm)
+    (L, 334e3),
     (Tm, 0),
 ]
 ss.register_parameters(*param_list)
@@ -154,23 +154,20 @@ ic_dict = {
 }
 
 # define the system inputs and their mapping
-
 def controller_factory(idx, gain):
-
-    def ff_law(t, weights):
-        return 0
 
     def control_law(t, weights):
         """ Top notch boundary feedback """
         return -gain * weights[idx]
 
-    return ff_law
-    # return control_law
+    return control_law
 
 
 input_dict = {
-    u1_t: controller_factory(0, 1),
-    u2_t: controller_factory(-1, 1),
+    u1_t: lambda t, w: -500,
+    u2_t: lambda t, w: 0,
+    # u1_t: controller_factory(0, 1),
+    # u2_t: controller_factory(-1, 1),
 }
 
 # run the simulation

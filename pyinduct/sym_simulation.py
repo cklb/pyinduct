@@ -733,13 +733,18 @@ def create_first_order_system(weak_forms):
     sorted_state = sp.Matrix(sorted(state_elems, key=lambda x: str(x)))
     # sp.pprint(sorted_state)
 
-    print(">>> solving for targets")
-    sol_dict = sp.solve(new_forms, targets)
-    # sp.pprint(ss_form)
+    if 0:
+        print(">>> solving for targets")
+        sol_dict = sp.solve(new_forms, targets)
+        # sp.pprint(ss_form)
 
-    print(">>> building statespace form")
-    ss_form = sp.Matrix([sol_dict[s.diff(time)] for s in sorted_state])
-    # sp.pprint(ss_form)
+        print(">>> building statespace form")
+        ss_form = sp.Matrix([sol_dict[s.diff(time)] for s in sorted_state])
+        # sp.pprint(ss_form)
+    else:
+        sorted_targets = [s.diff(time) for s in sorted_state]
+        A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
+        ss_form = sp.inv_quick(A) @ b
 
     return ss_form, sorted_state, sorted_inputs
 

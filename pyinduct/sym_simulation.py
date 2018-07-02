@@ -998,8 +998,13 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     # build initial state
     init_weights = dict()
     for key, val in ics.items():
-        _weight_set = key.approximate_function(val)
-        new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
+        if isinstance(key, LumpedApproximation):
+            _weight_set = key.approximate_function(val)
+            new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
+        elif _weight_letter in str(key):
+            new_d = {key: val}
+        else:
+            raise NotImplementedError
         init_weights.update(new_d)
 
     y0 = [init_weights[lbl] for lbl in state]

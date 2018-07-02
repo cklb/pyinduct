@@ -1,4 +1,5 @@
 import pickle
+import numpy as np
 import sympy as sp
 
 import pyinduct as pi
@@ -8,7 +9,10 @@ import pyinduct.sym_simulation as ss
 N = 3
 
 # spatial domain
-spat_bounds = (0, 1)
+zb_dom = (0, 1)
+
+# temporal domain
+temp_dom = pi.Domain((0, 5), num=100)
 
 # define temporal and spatial variables
 t = ss.time
@@ -39,8 +43,8 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
 param_list = [
     (alpha[0], 1),
     (alpha[1], 2),
-    (Gamma[0], spat_bounds[0]),
-    (Gamma[1], spat_bounds[1]),
+    (Gamma[0], zb_dom[0]),
+    (Gamma[1], zb_dom[1]),
     (k[0], 1),
     (k[1], 2),
     (rho[0], 1),
@@ -63,6 +67,7 @@ boundaries_x2 = [
     sp.Eq(sp.Subs(x2_zt, z, 1), Tm),
 ]
 
+
 if 0:
     # build state transformation
     zeta_trafo = [(z - Gamma[idx])/(gamma_t - Gamma[idx]) for idx in range(2)]
@@ -72,10 +77,12 @@ if 0:
     quit()
 
 # define approximation basis
-nodes = pi.Domain(spat_bounds, num=N)
-fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
+spat_dom = pi.Domain(zb_dom, num=N)
+if 1:
+    fem_base = pi.LagrangeFirstOrder.cure_interval(spat_dom)
+else:
+    fem_base = ss.create_lag1ast_base(z, zb_dom, N)
 pi.register_base("fem", fem_base)
-# fem_base = ss.create_lag1ast_base(z, spat_bounds, N)
 
 # create approximations, homogenizing where needed
 x1_approx = ss.create_approximation(z, "fem", boundaries_x1)
@@ -90,13 +97,13 @@ for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
                                       [phi_1kz, phi_2kz])):
     beta = (gamma_t - Gamma[idx])
     expr = (
-        ss.InnerProduct(x.diff(t), phi, spat_bounds)
+        ss.InnerProduct(x.diff(t), phi, zb_dom)
         - alpha[idx] / beta**2 * (
             (x.diff(z) * phi).subs(z, 1)
-            - (x.diff(z) * phi).subs(z, 0)
-            - ss.InnerProduct(x.diff(z), phi.diff(z), spat_bounds)
+            - (x.diff(z) * phi).subs(z, 1)
+            - ss.InnerProduct(x.diff(z), phi.diff(z), zb_dom)
         )
-        - gamma_t.diff(t) / beta * ss.InnerProduct(z*x.diff(z), phi, spat_bounds)
+        - gamma_t.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, zb_dom)
     )
     equations.append(expr)
 
@@ -107,6 +114,7 @@ g_exp = (k[0] / (gamma_t - Gamma[0]) * x1_zt.diff(z).subs(z, 1)
          )
 equations.append(g_exp)
 sp.pprint(equations)
+
 # print(u1_t in equations[0].atoms(sp.Function))
 # print(equations[0])
 
@@ -131,62 +139,53 @@ rep_dict = {
 rep_eqs = ss.substitute_approximations(equations, rep_dict)
 print(rep_eqs)
 
-sys = ss.create_first_order_system(rep_eqs)
-# print(sys)
-quit()
-
-
-# substitute all weights with new symbols
-state_dict = dict()
-state_dt_dict = dict()
-state_derivatives = dict()
-for t in targets:
-    var = sp.Dummy()
-    state_dict[t.args[0]] = var
-    var_dt = sp.Dummy()
-    state_dt_dict[t] = var_dt
-    state_derivatives[var] = var_dt
-
-print(state_dict)
-print(state_dt_dict)
-print(state_derivatives)
-
-t_eqs = [eq.subs({**state_dict, **state_dt_dict}) for eq in rep_eqs]
-print(t_eqs)
+sys, state, inputs = ss.create_first_order_system(rep_eqs)
+sp.pprint(inputs)
+sp.pprint(state)
+sp.pprint(sys, num_columns=200)
 
 if 0:
-    mat_form = sp.linear_eq_to_matrix(t_eqs, state_dt_dict.values())
-    print(new_targets)
-    print(mat_form)
+    data = str(inputs), str(state), str(sys)
+    with open("symb_test_N={}.pkl".format(N), "wb") as f:
+        pickle.dump(data, f)
+    quit()
 
-print(">>> Solving for derivatives")
-rhs = sp.solve(t_eqs, list(state_dt_dict.values()), dict=True)[0]
-print(rhs)
+# define the initial conditions for each approximation
+ic_dict = {
+    x1_approx: -10 + 10*z,
+    x2_approx: 10 - 10*z,
+    gamma_approx: .5,
+}
 
-# input and variables
-all_vars = set()
-for eq in rhs.values():
-    sv = eq.atoms(sp.Function)
-    all_vars.update(sv)
+# define the system inputs and their mapping
 
-all_vars = sorted(all_vars, key=lambda _x: str(_x))
-input_vars = list(filter(lambda var: "u" in str(var), all_vars))
-state_vars = sorted(state_dict.values(), key=lambda _x: str(_x))
-state = sp.Matrix(state_vars)
-inputs = sp.Matrix(input_vars)
-# print(state)
-# print(inputs)
+def controller_factory(idx, gain):
 
-# build matrix expression for rhs
-rhs_list = []
-for var in state_vars:
-    rhs_list.append(rhs[state_derivatives[var]])
+    def control_law(t, weights):
+        """ Top notch boundary feedback """
+        return -gain * weights[idx]
 
-rhs_vec = sp.Matrix(rhs_list)
-jac = rhs_vec.jacobian(state)
+    return control_law
 
-# data = (inputs, state, rhs_vec)
-data = (str(input_vars), str(state_vars), str(rhs_list), str(jac))
-with open("symb_test_N={}.pkl".format(N), "wb") as f:
-    pickle.dump(data, f)
+
+input_dict = {
+    u1_t: controller_factory(0, 1),
+    u2_t: controller_factory(-1, 1),
+}
+
+# run the simulation
+np.seterr(under="warn")
+res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
+                                      inputs, state)
+
+
+t_dom = pi.Domain(points=res_weights.t)
+approximations = [x1_approx, x2_approx]
+weight_dict = ss._sort_weights(res_weights.y, state, approximations)
+results = ss._evaluate_approximations(weight_dict, approximations, t_dom, spat_dom)
+
+win = pi.PgAnimatedPlot(results)
+win2 = pi.PgSurfacePlot(results[0])
+pi.show()
+
 

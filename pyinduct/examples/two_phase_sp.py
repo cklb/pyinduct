@@ -69,18 +69,12 @@ if __name__ == "__main__" or test_examples:
             else:
                 raise NotImplementedError
 
-    def initial_condition_x1(z):
-        return -10 + 10*z
-
-    def initial_condition_x2(z):
-        return 10 - 10*z
-
-    def initial_condition_gamma(z):
-        return 0.5
-
+    def z_func(zb, gamma, Gamma):
+        # return (z - Gamma) / (gamma - Gamma)
+        return zb * (gamma - Gamma) + Gamma
 
     # define some bases
-    spat_dom = pi.Domain((0, 1), num=10)
+    spat_dom = pi.Domain((0, .1), num=3)
     nodes, base = pi.cure_interval(pi.LagrangeFirstOrder,
                                    spat_dom.bounds,
                                    len(spat_dom))
@@ -100,7 +94,7 @@ if __name__ == "__main__" or test_examples:
     # parameters (its only water)
     Tm = 0
     rho_m = 1  # kg/m^3
-    L = 334  # kg/m^3
+    L = 334e3  # J/kg
     rho = [0.91, 1]  # kg/m^3
     cp = [2.05, 4.19]
     k = [2.2, 0.591]
@@ -148,12 +142,12 @@ if __name__ == "__main__" or test_examples:
                             limits=spat_dom.bounds, scale=-1),
             # part. integrated 2nd order term
             pi.SymbolicTerm(term=scale1 * x_sym[i].diff(z).subs(z, 1),
-                            test_function=psi_num(1),
+                            test_function=psi_num(spat_dom.bounds[1]),
                             base_var_map=base_var_map,
                             input_var_map=input_var_map,
                             debug=True),
             pi.SymbolicTerm(term=-scale1 * (-(-1)**i) * beta[i] / k[i] * u_sym[i],
-                            test_function=psi_num(0),
+                            test_function=psi_num(spat_dom.bounds[0]),
                             base_var_map=base_var_map,
                             input_var_map=input_var_map,
                             input=sys_input,
@@ -164,11 +158,11 @@ if __name__ == "__main__" or test_examples:
                             input_var_map=input_var_map,
                             debug=True),
             # 1st order term
-            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] / beta[i] * x_sym[0].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=scale2 * k[0] / beta[0] / beta[i] * x_sym[0].diff(z).subs(z, spat_dom.bounds[1]) * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
-            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] / beta[i] * x_sym[1].diff(z).subs(z, 1) * z * x_sym[i].diff(z),
+            pi.SymbolicTerm(term=-scale2 * k[1] / beta[1] / beta[i] * x_sym[1].diff(z).subs(z, spat_dom.bounds[1]) * z * x_sym[i].diff(z),
                             test_function=psi_num,
                             base_var_map=base_var_map,
                             input_var_map=input_var_map),
@@ -177,12 +171,12 @@ if __name__ == "__main__" or test_examples:
 
     wf_gamma = pi.WeakFormulation([
         pi.ScalarTerm(argument=gamma_num.derive(temp_order=1), scale=scale2),
-        pi.SymbolicTerm(term=-k[0]/beta[0] * x_sym[0].diff(z).subs(z, 1),
-                        test_function=psi_coll(1),
+        pi.SymbolicTerm(term=-k[0]/beta[0] * x_sym[0].diff(z).subs(z, spat_dom.bounds[1]),
+                        test_function=psi_coll(spat_dom.bounds[0]),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
-        pi.SymbolicTerm(term=k[1]/beta[1] * x_sym[1].diff(z).subs(z, 1),
-                        test_function=psi_coll(1),
+        pi.SymbolicTerm(term=k[1]/beta[1] * x_sym[1].diff(z).subs(z, spat_dom.bounds[1]),
+                        test_function=psi_coll(spat_dom.bounds[0]),
                         base_var_map=base_var_map,
                         input_var_map=input_var_map),
         # some kind of dummies, i guess
@@ -192,8 +186,21 @@ if __name__ == "__main__" or test_examples:
     weak_forms.append(wf_gamma)
 
     # initial states
-    ic_x1 = np.array([pi.Function(initial_condition_x1)])
-    ic_x2 = np.array([pi.Function(initial_condition_x2)])
+    def initial_condition_gamma(zb):
+        return 0.05
+
+    def initial_condition_x1(zb):
+        return -10 + 1*z_func(zb,
+                              initial_condition_gamma(None),
+                              spat_dom.bounds[0])
+
+    def initial_condition_x2(zb):
+        return -10 + 1*z_func(zb,
+                              initial_condition_gamma(None),
+                              spat_dom.bounds[1])
+
+    ic_x1 = np.array([pi.Function(initial_condition_x1, domain=spat_dom.bounds)])
+    ic_x2 = np.array([pi.Function(initial_condition_x2, domain=spat_dom.bounds)])
     ic_gamma = np.array([pi.Function(initial_condition_gamma)])
 
     ics = {
@@ -209,7 +216,7 @@ if __name__ == "__main__" or test_examples:
     }
 
     # simulation
-    temp_domain = pi.Domain((0, 1), num=101)
+    temp_domain = pi.Domain((0, .1), num=101)
     settings = dict(
         name="lsoda",
         # name="vode",
@@ -218,10 +225,13 @@ if __name__ == "__main__" or test_examples:
         method="bdf",
         nsteps=1e3
     )
+    # np.seterr(all="warn")
     result = pi.simulate_systems(weak_forms, ics, temp_domain, domains,
                                  settings=settings)
 
     # visualization
+    gamm_traj = result[2].output_data[:, 0]
+
     win = pi.PgAnimatedPlot(result)
     pi.show()
 

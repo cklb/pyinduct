@@ -5,10 +5,13 @@ import sympy as sp
 import pyinduct as pi
 import pyinduct.sym_simulation as ss
 
+import pyqtgraph as pg
+
 # approximation order
 N = 3
 
-# spatial domain
+# spatial domains
+spat_dom = pi.Domain((0, .1), num=N)
 zb_dom = (0, 1)
 
 # temporal domain
@@ -67,19 +70,10 @@ boundaries_x2 = [
     sp.Eq(sp.Subs(x2_zt, z, 1), Tm),
 ]
 
-
-if 0:
-    # build state transformation
-    zeta_trafo = [(z - Gamma[idx])/(gamma_t - Gamma[idx]) for idx in range(2)]
-    x1_approx_z = x1_approx.subs(z, zeta_trafo[0])
-    x2_approx_z = x2_approx.subs(z, zeta_trafo[1])
-    print(x1_approx_z)
-    quit()
-
 # define approximation basis
-spat_dom = pi.Domain(zb_dom, num=N)
 if 1:
-    fem_base = pi.LagrangeFirstOrder.cure_interval(spat_dom)
+    nodes = pi.Domain(zb_dom, num=N)
+    fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
 else:
     fem_base = ss.create_lag1ast_base(z, zb_dom, N)
 pi.register_base("fem", fem_base)
@@ -100,7 +94,7 @@ for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
         ss.InnerProduct(x.diff(t), phi, zb_dom)
         - alpha[idx] / beta**2 * (
             (x.diff(z) * phi).subs(z, 1)
-            - (x.diff(z) * phi).subs(z, 1)
+            - (x.diff(z) * phi).subs(z, 0)
             - ss.InnerProduct(x.diff(z), phi.diff(z), zb_dom)
         )
         - gamma_t.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, zb_dom)
@@ -152,8 +146,10 @@ if 0:
 
 # define the initial conditions for each approximation
 ic_dict = {
-    x1_approx: -10 + 10*z,
-    x2_approx: 10 - 10*z,
+    x1_approx: lambda z: -10,
+    # x1_approx: -10 + 10*z,
+    x2_approx: lambda z: 10,
+    # x2_approx: 10 - 10*z,
     gamma_approx: .5,
 }
 
@@ -161,11 +157,15 @@ ic_dict = {
 
 def controller_factory(idx, gain):
 
+    def ff_law(t, weights):
+        return 0
+
     def control_law(t, weights):
         """ Top notch boundary feedback """
         return -gain * weights[idx]
 
-    return control_law
+    return ff_law
+    # return control_law
 
 
 input_dict = {
@@ -177,15 +177,26 @@ input_dict = {
 np.seterr(under="warn")
 res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
                                       inputs, state)
-
-
 t_dom = pi.Domain(points=res_weights.t)
-approximations = [x1_approx, x2_approx]
+
+# post processing
+
+if 0:
+    # build state transformation
+    zeta_trafo = [(z - Gamma[idx])/(gamma_approx - Gamma[idx]) for idx in range(2)]
+    # approximations = [appr.subs(z, trafo) for appr, trafo in
+    #                   zip([x1_approx, x2_approx], zeta_trafo)]
+else:
+    approximations = [x1_approx, x2_approx]
+
 weight_dict = ss._sort_weights(res_weights.y, state, approximations)
-results = ss._evaluate_approximations(weight_dict, approximations, t_dom, spat_dom)
+results = ss._evaluate_approximations(weight_dict, approximations, t_dom, nodes)
+gamma_sim = res_weights.y[-1]
+pg.plot(t_dom.points, gamma_sim)
 
 win = pi.PgAnimatedPlot(results)
-win2 = pi.PgSurfacePlot(results[0])
+win1 = pi.PgSurfacePlot(results[0])
+win2 = pi.PgSurfacePlot(results[1])
 pi.show()
 
 

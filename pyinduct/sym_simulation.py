@@ -236,6 +236,21 @@ class LumpedApproximation:
         expr = self.expression.subs(list(zip(self.weights, weights))).subs(get_parameters())
         return sp.lambdify(self._syms, expr, modules="numpy")
 
+    # def subs(self, *args):
+    #     new_symbols = [sym.subs(*args) for sym in self._syms]
+    #     new_ess_expr = self._ess_expr.subs(*args)
+    #     new_nat_expr = self._nat_expr.subs(*args)
+    #     new_bcs = [bc.subs(*args) for bc in self._bcs]
+    #
+    #     new_obj = LumpedApproximation(self._syms,
+    #                                   new_ess_expr,
+    #                                   new_nat_expr,
+    #                                   self._weights,
+    #                                   self._base_map,
+    #                                   new_bcs)
+    #
+    #     return new_obj
+
 
 class InnerProduct(sp.Expr):
     """
@@ -1015,7 +1030,7 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
                     t_span=time_dom.bounds,
                     t_eval=time_dom.points,
                     jac=_jac,
-                    # method="BDF"
+                    method="BDF"
                     )
     if not res.success:
         warnings.warn("Integration failed at t={} with '{}'".format(

@@ -185,7 +185,7 @@ if __name__ == "__main__" or test_examples:
 
     u1, u2, u3 = [ss.get_input() for i in range(3)]
     x1, x2, x4 = [ss.get_field_variable(z) for i in range(3)]
-    x3 = ss.get_weight()
+    x3 = sp.Function("x3")(t)
 
     ACat = 0.15 * 0.15
     eps = 0.64504929009858025
@@ -214,9 +214,9 @@ if __name__ == "__main__" or test_examples:
 
     x_1 = ss.create_approximation(z, "fem_base", [bc_x1])
     x_2 = ss.create_approximation(z, "fem_base", [bc_x2])
-    x_3 = sp.Function("x3")(t)
+    x_3 = ss.get_weight()
     x_4 = ss.create_approximation(z, "fem_base", [bc_x4])
-    approximations = [x1, x2, x3, x4]
+    approximations = [x_1, x_2, x_3, x_4]
 
     psi1, psi2, psi4 = [ss.get_test_function(z) for i in range(3)]
 
@@ -263,8 +263,8 @@ if __name__ == "__main__" or test_examples:
     wf2 = (
         - ss.InnerProduct(x2.diff(t), psi2, domain.bounds)
         + v * (-(x2 * psi2).subs(z, l)
-               + u2 * psi1.subs(z, 0)
-               + ss.InnerProduct(x2, psi1.diff(z), domain.bounds)
+               + u2 * psi2.subs(z, 0)
+               + ss.InnerProduct(x2, psi2.diff(z), domain.bounds)
                )
         - Omega * k3 * sp.exp(-E3 / R * (1 / x4 - 1 / x4_ref)) * x3 * x2
     )
@@ -310,6 +310,7 @@ if __name__ == "__main__" or test_examples:
                + u3 * psi4.subs(z, 0)
                + ss.InnerProduct(x4, psi4.diff(z), domain.bounds)
                )
+        - beta1 * ss.InnerProduct(x4 - Ta, psi4, domain.bounds)
     )
     weak_forms = [wf1, wf2, wf3, wf4]
 
@@ -345,7 +346,7 @@ if __name__ == "__main__" or test_examples:
     rep_eqs = ss.substitute_approximations(weak_forms, base_var_map)
     sys, state, inputs = ss.create_first_order_system(rep_eqs)
 
-    temp_domain = Domain((0, 10), num=101)
+    temp_domain = pi.Domain((0, 10), num=101)
     res = ss.simulate_state_space(temp_domain, sys, ic_dict, input_dict,
                                   inputs, state)
 

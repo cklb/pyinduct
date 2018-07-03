@@ -840,7 +840,7 @@ def domain_intersection(first, second):
     return intersection
 
 
-def integrate_function(func, interval):
+def integrate_function(func, interval, args=()):
     """
     Numerically integrate a function on a given interval using
     :func:`.complex_quadrature`.
@@ -849,6 +849,8 @@ def integrate_function(func, interval):
         func(callable): Function to integrate.
         interval(set of tuples): Set of (start, end) values of the intervals
             to integrate on.
+    Keyword Args:
+        args(tuple): Optional, extra arguments to pass to func.
 
     Return:
         tuple: (Result of the Integration, errors that occurred during the
@@ -857,7 +859,7 @@ def integrate_function(func, interval):
     result = 0
     err = 0
     for area in interval:
-        res = complex_quadrature(func, area[0], area[1])
+        res = complex_quadrature(func, area[0], area[1], args=args)
         result += res[0]
         err += res[1]
 
@@ -878,11 +880,11 @@ def complex_quadrature(func, a, b, **kwargs):
         tuple: (real part, imaginary part)
     """
 
-    def real_func(x):
-        return np.real(func(x))
+    def real_func(x, *args):
+        return np.real(func(x, *args))
 
-    def imag_func(x):
-        return np.imag(func(x))
+    def imag_func(x, *args):
+        return np.imag(func(x, *args))
 
     real_integral = integrate.quad(real_func, a, b, **kwargs)
     imag_integral = integrate.quad(imag_func, a, b, **kwargs)

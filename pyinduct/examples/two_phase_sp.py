@@ -8,7 +8,7 @@ import pyinduct.sym_simulation as ss
 import pyqtgraph as pg
 
 # approximation order
-N = 5
+N = 3
 
 # spatial domains
 spat_dom = pi.Domain((0, .1), num=N)
@@ -98,6 +98,7 @@ for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
             - ss.InnerProduct(x.diff(z), phi.diff(z), zb_dom)
         )
         - gamma_t.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, zb_dom)
+        + sp.cos(t)
     )
     equations.append(expr)
 
@@ -136,7 +137,7 @@ print(rep_eqs)
 sys, state, inputs = ss.create_first_order_system(rep_eqs)
 sp.pprint(inputs)
 sp.pprint(state)
-sp.pprint(sys, num_columns=200)
+# sp.pprint(sys, num_columns=200)
 
 if 0:
     data = str(inputs), str(state), str(sys)

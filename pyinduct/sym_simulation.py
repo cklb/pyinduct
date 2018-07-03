@@ -41,7 +41,8 @@ def get_parameter(param):
 
 def get_parameters(*args):
     if not args:
-        return _parameters.items()
+        # return _parameters.items()
+        return _parameters
     else:
         return [_parameters.get(arg, None) for arg in args]
 
@@ -101,28 +102,28 @@ def get_test_function(*symbols):
     return g
 
 
-_lambda_cnt = 0
+_input_cnt = 0
 _input_letter = "_u"
 
 
 def get_input():
-    global _lambda_cnt
-    u = sp.Function("{}_{}".format(_input_letter, _lambda_cnt),
+    global _input_cnt
+    u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
                     real=True)(time)
-    _lambda_cnt += 1
+    _input_cnt += 1
     return u
 
 
-# _lambda_cnt = 0
-# _lambda_letter = "_l"
+_lambda_cnt = 0
+_lambda_letter = "_l"
 
 
-# def get_lambda():
-#     global _lambda_cnt
-#     u = sp.Function("{}_{}".format(_lambda_letter, _lambda_cnt),
-#                     real=True)(time)
-#     _lambda_cnt += 1
-#     return u
+def get_lambda(*args):
+    global _lambda_cnt
+    l = sp.Function("{}_{}".format(_lambda_letter, _lambda_cnt),
+                    real=True)(*args)
+    _lambda_cnt += 1
+    return l
 
 
 def build_lag1st(sym, start, mid, end):
@@ -308,12 +309,30 @@ class FakeIntegral(sp.Integral):
         return self.func(*[arg.doit() for arg in self.args])
 
     def eval_numerically(self):
-        # build callback
+        """
+        Build function for numerical evaluation of this expression
+
+        If the function only depends on known symbols, calculate its value.
+
+        Returns:
+            Either the result value or a Function object with `_imp_` attribute
+            to calculate the result during runtime.
+        """
+        # Identify time dependent terms the integral might depend on
+        eval_args = []
+        if time in self.free_symbols:
+            eval_args.append(time)
+        eval_args += list(_find_weights(self.args))
+
+        # build callback for spatial integration
         kernel, (sym, a, b) = self.args
-        f = sp.lambdify(sym, kernel, modules="numpy")
+        if eval_args:
+            f = sp.lambdify((sym, eval_args), kernel, modules="numpy")
+        else:
+            f = sp.lambdify(sym, kernel, modules="numpy")
 
         # extract domains
-        domain = {(float(a), float(b))}
+        domain = {(-np.inf, np.inf)}
         nonzero = domain
         for func in kernel.atoms(sp.Function):
             if hasattr(func, "_imp_"):
@@ -321,22 +340,33 @@ class FakeIntegral(sp.Integral):
                 domain = domain_intersection(domain, new_dom)
                 nonzero = domain_intersection(nonzero, func._imp_.nonzero)
 
-        interval = domain_intersection(domain, nonzero)
+        kernel_domain = domain_intersection(domain, nonzero)
 
-        # perform integration
-        if interval:
-            if 0:
-                reg = next(iter(interval))
-                x_vals = np.linspace(float(a), float(b))
-                plt.plot(x_vals, f(x_vals).T)
-                plt.axhline(xmin=reg[0], xmax=reg[1], c="r")
-                plt.show()
+        # build dummy function that will compute the integral
+        def _eval_integral(*args):
+            up_a, up_b = [lim.subs(zip(eval_args, args)) for lim in [a, b]]
+            integral_domain = {(float(up_a), float(up_b))}
+            interval = domain_intersection(kernel_domain, integral_domain)
+            if interval:
+                if 0:
+                 reg = next(iter(interval))
+                 x_vals = np.linspace(float(a), float(b))
+                 plt.plot(x_vals, f(x_vals).T)
+                 plt.axhline(xmin=reg[0], xmax=reg[1], c="r")
+                 plt.show()
+                res, err = integrate_function(f, interval, args=args)
+            else:
+                # kernel is zero on the whole region of the integral
+                res = 0
 
-            res, err = integrate_function(f, interval)
-        else:
-            # kernel is zero on the whole domain
-            res = 0
-        return res
+            return res
+
+        if not eval_args:
+            return _eval_integral()
+
+        int_func = get_lambda(*eval_args)
+        int_func.func._imp_ = staticmethod(_eval_integral)
+        return int_func
 
 
 class Lagrange1stOrder(sp.Piecewise):
@@ -706,6 +736,7 @@ def create_first_order_system(weak_forms):
 
     print(">>> simplifying integrals")
     new_forms = _simplify_integrals(weak_forms)
+    # new_forms = weak_forms
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> substituting derivatives")
@@ -713,9 +744,10 @@ def create_first_order_system(weak_forms):
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> substituting parameters")
-    new_forms = [form.subs(get_parameters()) for form in new_forms]
+    new_forms = [form.xreplace(get_parameters()) for form in new_forms]
     # sp.pprint(new_forms, num_columns=200)
 
+    print(">>> solving integrals")
     new_forms = _solve_integrals(new_forms)
     # sp.pprint(new_forms, num_columns=200)
 
@@ -730,11 +762,12 @@ def create_first_order_system(weak_forms):
 
     print(">>> identifying state components")
     state_elems = _find_weights(weak_forms)
-    sorted_state = sp.Matrix(sorted(state_elems, key=lambda x: str(x)))
+    sorted_state = sp.Matrix(sorted(state_elems,
+                                    key=lambda x: float(str(x)[3:-3])))
     # sp.pprint(sorted_state)
 
+    print(">>> solving for targets")
     if 0:
-        print(">>> solving for targets")
         sol_dict = sp.solve(new_forms, targets)
         # sp.pprint(ss_form)
 
@@ -743,8 +776,14 @@ def create_first_order_system(weak_forms):
         # sp.pprint(ss_form)
     else:
         sorted_targets = [s.diff(time) for s in sorted_state]
+        # rep_map = {t: d for t, d in zip(sorted_targets, dummy_targets)}
+        print("collecting coefficient matrices")
         A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
-        ss_form = sp.inv_quick(A) @ b
+        print("solving equation system")
+        ss_form = A.LUsolve(b)
+        # dummy_targets = [sp.Dummy() for t in sorted_targets]
+        # ss_form = sp.linsolve((A, b), dummy_targets)
+        # ss_form = sp.inv_quick(A) @ b
 
     return ss_form, sorted_state, sorted_inputs
 
@@ -755,11 +794,9 @@ def _convert_derivatives(new_forms):
         all_symbols.update(f.atoms(sp.Symbol))
     derivatives = _find_derivatives(new_forms, all_symbols)
 
-    # derivatives = _find_derivatives(new_forms, time)
-    # derivatives.update(_find_derivatives(new_forms, space))
     subs_list = []
     targets = set()
-    for der in derivatives:
+    for der in tqdm(derivatives):
         new_forms, subs_pairs, target_set = _convert_higher_derivative(
             new_forms, der)
         subs_list += subs_pairs
@@ -829,7 +866,7 @@ def _convert_higher_derivative(weak_forms, derivative):
             red_deriv = derivative.func(*derivative.args[:-1])
             new_eq = new_var - red_deriv
             new_der = new_var.diff(time)
-            new_forms = [form.subs(derivative, new_der)
+            new_forms = [form.xreplace({derivative: new_der})
                          for form in weak_forms]
             new_forms.append(new_eq)
 
@@ -872,13 +909,14 @@ def _simplify_integrals(weak_forms):
 
     integrals = _find_integrals(weak_forms)
 
-    subs_list = []
-    for integral in integrals:
+    subs_dict = {}
+    for integral in tqdm(integrals):
         red_int = _reduce_kernel(integral)
         if integral != red_int:
-            subs_list.append((integral, red_int))
+            subs_dict[integral] = red_int
 
-    red_forms = [f.subs(subs_list) for f in weak_forms]
+    # red_forms = [f.subs(subs_list) for f in weak_forms]
+    red_forms = [f.xreplace(subs_dict) for f in weak_forms]
     return red_forms
 
 
@@ -886,23 +924,20 @@ def _solve_integrals(weak_forms):
 
     solved_map = dict()
     integrals = _find_integrals(weak_forms)
-    print(">>> solving integrals")
-    # for integral in integrals:
     for integral in tqdm(integrals):
-        if integral in solved_map:
-            print("Skipping eval")
-            continue
-        if time in integral.free_symbols:
-            res = sp.integrate(integral.args[0], integral.args[1])
-            if res.free_symbols.intersection(tuple(space)):
-                raise ValueError
-            solved_map[integral] = res
-        else:
-            res = integral.eval_numerically()
-            solved_map[integral] = res
+        # if time in integral.free_symbols:
+        #     print("Falling back to symbolic integration")
+        #     res = sp.integrate(integral.args[0], integral.args[1])
+        #     if res.free_symbols.intersection(tuple(space)):
+        #         raise ValueError
+        #     solved_map[integral] = res
+        # else:
+        res = integral.eval_numerically()
+        solved_map[integral] = res
 
-    tqdm.write(">>> substituting the solutions")
-    subs_forms = [f.subs(solved_map) for f in tqdm(weak_forms)]
+    # tqdm.write(">>> substituting the solutions")
+    subs_forms = [f.xreplace(solved_map) for f in weak_forms]
+
     return subs_forms
 
 
@@ -954,7 +989,7 @@ def _reduce_kernel(integral):
                 else:
                     return FakeIntegral(kernel, (sym, a, b))
 
-            dep_args = [arg.subs(arg_map) for arg in dep_args]
+            dep_args = [arg.xreplace(arg_map) for arg in dep_args]
 
         new_kernel = sp.Mul(*dep_args)
         new_part = _reduce_kernel(FakeIntegral(new_kernel, (sym, a, b)))
@@ -968,7 +1003,7 @@ def _reduce_kernel(integral):
 
 def _approximate_term(term, sym):
     """
-    Series expansion of unseparable terms
+    Series expansion of inseparable terms
 
     Args:
         term: Term to expand.
@@ -996,40 +1031,34 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     input_mapping = {inp: sp.Dummy() for inp in inputs}
     state_mapping = {s: sp.Dummy() for s in state}
     subs_map = {**input_mapping, **state_mapping}
-    dummy_rhs = sp.Matrix([eq.subs(subs_map) for eq in rhs_expr])
+    dummy_rhs = sp.Matrix([eq.xreplace(subs_map) for eq in rhs_expr])
 
-    args = [[input_mapping[inp] for inp in inputs],
-            [state_mapping[st] for st in state]]
+    args = [time,
+            [input_mapping[inp] for inp in inputs],
+            [state_mapping[st] for st in state]
+            ]
     rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
+    # rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="sympy", dummify=False)
+    # print(str(rhs_cb))
+    # quit()
 
-    rhs_jac = dummy_rhs.jacobian(args[1])
+    rhs_jac = dummy_rhs.jacobian(args[-1])
     jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
 
     def _rhs(t, y):
         u = [input_dict[inp](t, y) for inp in inputs]
-        y_dt = np.ravel(rhs_cb(u, y))
+        y_dt = np.ravel(rhs_cb(t, u, y))
         return y_dt
 
     def _jac(t, y):
         u = [input_dict[inp](t, y) for inp in inputs]
-        jac = jac_cb(u, y)
+        jac = jac_cb(t, u, y)
         return jac
 
-    # build initial state
-    init_weights = dict()
-    for key, val in ics.items():
-        if isinstance(key, LumpedApproximation):
-            _weight_set = key.approximate_function(val)
-            new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
-        elif _weight_letter in str(key):
-            new_d = {key: val}
-        else:
-            raise NotImplementedError
-        init_weights.update(new_d)
+    print(">>> projecting initial states")
+    y0 = get_state(ics, state)
 
-    y0 = [init_weights[lbl] for lbl in state]
-
-    # simulate
+    print(">>> running time step simulation")
     res = solve_ivp(fun=_rhs,
                     y0=y0,
                     t_span=time_dom.bounds,
@@ -1042,6 +1071,34 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
             res.t[-1], res.message))
 
     return res
+
+
+def get_state(approx_map, state):
+    """
+    Build initial state vector for time step simulation
+
+    Args:
+        approx_map(dict): Mapping that associates the used approximations with
+            either symbolic expressions or lambda functions in the
+            spatial dimensions.
+        state(iterable): Iterable holding the elements of the state vector.
+
+    Returns:
+        Numpy array with shape (N,) where `N = len(state)` .
+
+    """
+    init_weights = dict()
+    for key, val in approx_map.items():
+        if isinstance(key, LumpedApproximation):
+            _weight_set = key.approximate_function(val)
+            new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
+        elif _weight_letter in str(key):
+            new_d = {key: val}
+        else:
+            raise NotImplementedError
+        init_weights.update(new_d)
+    y0 = np.array([init_weights[lbl] for lbl in state])
+    return y0
 
 
 def _sort_weights(weights, state, approximations):
@@ -1063,8 +1120,6 @@ def _sort_weights(weights, state, approximations):
 def _evaluate_approximations(weight_dict, approximations, temp_dom, spat_doms):
     """
     Evaluate approximations on the given grids
-
-
     """
     if isinstance(spat_doms, Domain):
         spat_doms = [spat_doms]
@@ -1084,7 +1139,9 @@ def _evaluate_approximations(weight_dict, approximations, temp_dom, spat_doms):
         for coord_idx in range(len(r_grids[0])):
             # fill spatial parameters
             args[:-temp_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
+            # fill weights
             args[-temp_dim:] = weight_mat[:, r_grids[-1][coord_idx]]
+            # resolve values
             res[coord_idx] = approx(*args)
 
         # per convention the time axis comes first

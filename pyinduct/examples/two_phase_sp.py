@@ -128,7 +128,6 @@ rep_dict = {
     x2_zt: x2_approx,
     phi_1kz: x1_test,
     phi_2kz: x2_test,
-    gamma_t: gamma_approx
 }
 
 rep_eqs = ss.substitute_approximations(equations, rep_dict)

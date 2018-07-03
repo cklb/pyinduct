@@ -32,7 +32,7 @@ phi_k = ss.get_test_function(z)
 alpha = sp.symbols("alpha", real=True)
 param_list = [
     (alpha, .1),
-    ("enable_approx", True),
+    # ("enable_approx", True),
     ("approx_pos", .5),
     ("approx_order", 2),
 ]
@@ -45,7 +45,7 @@ boundaries = [
 ]
 
 # define approximation basis
-if 0:
+if 1:
     nodes = pi.Domain(spat_bounds, num=N)
     fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
 else:
@@ -57,9 +57,9 @@ pi.register_base("fem", fem_base)
 x_approx = ss.create_approximation(z, "fem", boundaries)
 
 # define initial conditions
-x0 = 1e-1 * sp.sin(z*sp.pi)
+# x0 = 1e-1 * sp.sin(z*sp.pi)
 # x0 = 10 * z
-# x0 = lambda _z: .1
+x0 = lambda _z: 10
 
 if 0:
     state0 = x_approx.approximate_function(x0)
@@ -73,9 +73,11 @@ if 0:
 
 # some variants for nonlinearities
 # a0 = 0
+# a0 = 1
 # a0 = (1 + 10 * x)
 # a0 = x**2
-a0 = sp.exp(x)
+# a0 = sp.cos(x)
+# a0 = sp.cos(t)
 # a0 = 2*x**2 + sp.exp(x)
 
 # define the variational formulation for both phases
@@ -84,7 +86,7 @@ weak_form = [
     - alpha * ((x.diff(z)*phi_k).subs(z, 1)
                - (x.diff(z)*phi_k).subs(z, 0)
                - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
-    - ss.InnerProduct(a0 * x, phi_k, spat_bounds)
+    - ss.InnerProduct(sp.exp(-x), phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 
@@ -121,8 +123,8 @@ ic_dict = {
 
 def controller(t, weights):
     """ Top notch boundary feedback """
-    k = 1e2
-    # k = 0
+    # k = 1e2
+    k = 0
     return -k * weights[0]
 
 
@@ -142,4 +144,5 @@ weight_dict = ss._sort_weights(res_weights.y, state, [x_approx])
 results = ss._evaluate_approximations(weight_dict, [x_approx], t_dom, spat_dom)
 
 win = pi.PgAnimatedPlot(results)
+wins = pi.PgSurfacePlot(results[0])
 pi.show()

@@ -318,6 +318,8 @@ class FakeIntegral(sp.Integral):
             Either the result value or a Function object with `_imp_` attribute
             to calculate the result during runtime.
         """
+        kernel, (sym, a, b) = self.args
+
         # Identify time dependent terms the integral might depend on
         eval_args = []
         if time in self.free_symbols:
@@ -325,22 +327,21 @@ class FakeIntegral(sp.Integral):
         eval_args += list(_find_weights(self.args))
 
         # build callback for spatial integration
-        kernel, (sym, a, b) = self.args
-        if eval_args:
-            f = sp.lambdify((sym, eval_args), kernel, modules="numpy")
-        else:
-            f = sp.lambdify(sym, kernel, modules="numpy")
+        f = sp.lambdify([sym] + eval_args, kernel, modules="numpy")
 
+        # TODO the nonzero logic only holds for a product of functions
         # extract domains
+        # assert not isinstance(kernel, sp.Add)
         domain = {(-np.inf, np.inf)}
-        nonzero = domain
+        # nonzero = domain
         for func in kernel.atoms(sp.Function):
             if hasattr(func, "_imp_"):
                 new_dom = func._imp_.domain
                 domain = domain_intersection(domain, new_dom)
-                nonzero = domain_intersection(nonzero, func._imp_.nonzero)
+                # nonzero = domain_intersection(nonzero, func._imp_.nonzero)
 
-        kernel_domain = domain_intersection(domain, nonzero)
+        # kernel_domain = domain_intersection(domain, nonzero)
+        kernel_domain = domain
 
         # build dummy function that will compute the integral
         def _eval_integral(*args):
@@ -356,7 +357,7 @@ class FakeIntegral(sp.Integral):
                  plt.show()
                 res, err = integrate_function(f, interval, args=args)
             else:
-                # kernel is zero on the whole region of the integral
+                # kernel is zero or undefined on the whole region of the integral
                 res = 0
 
             return res
@@ -925,13 +926,6 @@ def _solve_integrals(weak_forms):
     solved_map = dict()
     integrals = _find_integrals(weak_forms)
     for integral in tqdm(integrals):
-        # if time in integral.free_symbols:
-        #     print("Falling back to symbolic integration")
-        #     res = sp.integrate(integral.args[0], integral.args[1])
-        #     if res.free_symbols.intersection(tuple(space)):
-        #         raise ValueError
-        #     solved_map[integral] = res
-        # else:
         res = integral.eval_numerically()
         solved_map[integral] = res
 
@@ -1063,8 +1057,8 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
                     y0=y0,
                     t_span=time_dom.bounds,
                     t_eval=time_dom.points,
-                    jac=_jac,
-                    method="BDF"
+                    # jac=_jac,
+                    # method="BDF"
                     )
     if not res.success:
         warnings.warn("Integration failed at t={} with '{}'".format(

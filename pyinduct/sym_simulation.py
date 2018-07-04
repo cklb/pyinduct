@@ -16,7 +16,7 @@ from matplotlib import pyplot as plt
 
 from .registry import get_base
 from .core import (Domain, Function, Base, domain_intersection, integrate_function,
-                   project_on_base, EvalData)
+                   project_on_base, EvalData, Bunch)
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -628,6 +628,7 @@ def substitute_approximations(weak_form, mapping):
         Extended equation system with substituted mapping.
     """
 
+    print(">>> expanding generic formulation")
     ext_form, ext_mapping = _expand_kth_terms(weak_form, mapping)
 
     def wrap_expr(expr, *sym):
@@ -667,14 +668,13 @@ def substitute_approximations(weak_form, mapping):
     print(">>> substituting symbolic approximations")
     rep_eqs = []
     for eq in tqdm(ext_form):
-    # for eq in ext_form:
         rep_eq = eq
         for pair in rep_list:
             rep_eq = rep_eq.replace(*pair, simultaneous=True)
 
         rep_eqs.append(rep_eq.doit())
 
-    return rep_eqs
+    return sp.Matrix(rep_eqs)
 
 
 def _expand_kth_terms(weak_form, mapping):
@@ -713,7 +713,7 @@ def _expand_kth_terms(weak_form, mapping):
                 new_exprs += new_eqs
                 new_mapping.update(new_map)
 
-    return new_exprs, new_mapping
+    return sp.Matrix(new_exprs), new_mapping
 
 
 def _substitute_kth_occurrence(equation, symbol, expressions):
@@ -733,10 +733,12 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     return new_eqs, mappings
 
 
-def create_first_order_system(weak_forms):
+def create_first_order_system(weak_forms, input_map):
+
+    new_forms = sp.Matrix(weak_forms)
 
     print(">>> simplifying integrals")
-    new_forms = _simplify_integrals(weak_forms)
+    new_forms = _simplify_integrals(new_forms)
     # new_forms = weak_forms
     # sp.pprint(new_forms, num_columns=200)
 
@@ -745,7 +747,7 @@ def create_first_order_system(weak_forms):
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> substituting parameters")
-    new_forms = [form.xreplace(get_parameters()) for form in new_forms]
+    new_forms = new_forms.xreplace(get_parameters())
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> solving integrals")
@@ -753,21 +755,21 @@ def create_first_order_system(weak_forms):
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> running remaining evaluations")
-    new_forms = [form.doit() for form in new_forms]
+    new_forms = new_forms.doit()
     # sp.pprint(ss_form)
 
     print(">>> identifying inputs")
-    inputs = _find_inputs(weak_forms)
+    inputs = _find_inputs(new_forms)
     sorted_inputs = sorted(inputs, key=lambda x: str(x))
     # sp.pprint(sorted_inputs)
 
     print(">>> identifying state components")
-    state_elems = _find_weights(weak_forms)
+    state_elems = _find_weights(new_forms)
     sorted_state = sp.Matrix(sorted(state_elems,
                                     key=lambda x: float(str(x)[3:-3])))
     # sp.pprint(sorted_state)
 
-    print(">>> solving for targets")
+    print(">>> solving for targets:")
     if 0:
         sol_dict = sp.solve(new_forms, targets)
         # sp.pprint(ss_form)
@@ -778,15 +780,93 @@ def create_first_order_system(weak_forms):
     else:
         sorted_targets = [s.diff(time) for s in sorted_state]
         # rep_map = {t: d for t, d in zip(sorted_targets, dummy_targets)}
-        print("collecting coefficient matrices")
+        print("-collecting coefficient matrices")
         A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
-        print("solving equation system")
+        print("-solving equation system")
         ss_form = A.LUsolve(b)
         # dummy_targets = [sp.Dummy() for t in sorted_targets]
         # ss_form = sp.linsolve((A, b), dummy_targets)
         # ss_form = sp.inv_quick(A) @ b
 
-    return ss_form, sorted_state, sorted_inputs
+    input_derivatives = [d for d in _find_derivatives(weak_forms, time)
+                         if d.args[0] in inputs]
+    if input_derivatives:
+        print(">>> eliminating input derivatives")
+        ss_form, new_state, state_trafos = _eliminate_input_derivatives(
+            input_derivatives,
+            ss_form,
+            sorted_state,
+            inputs)
+    else:
+        state_maps = None
+
+    ss_sys = Bunch(rhs=ss_form,
+                   state=sorted_state,
+                   inputs=sorted_inputs,
+                   input_map=input_map,
+                   orig_state=sorted_state,
+                   transformations=state_trafos)
+
+    return ss_sys
+
+
+def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
+
+    # build complete form
+    rep_eqs = substitute_approximations(weak_forms, approx_map)
+
+    # convert to state space system
+    ss_sys = create_first_order_system(rep_eqs, input_map)
+
+    # process initial conditions
+    y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
+
+    # simulate
+    res_weights = simulate_state_space(ss_sys, y0, temp_dom)
+
+    # post process
+    t_dom = Domain(points=res_weights.t)
+
+    # extract original state
+    state_traj = calc_original_state(res_weights, ss_sys)
+
+    weight_dict = _sort_weights(res_weights.y, ss_sys.state, [x_approx])
+    results = _evaluate_approximations(weight_dict, [x_approx], t_dom, spat_dom)
+
+    return results
+
+
+def calc_initial_sate(ss_sys, ics, t0):
+    print(">>> projecting initial states")
+    y0_orig = get_state(ics, ss_sys.orig_state)
+    inp_values = [ss_sys.input_dict[inp](time=t0, weights=y0_orig)
+                  for inp in ss_sys.inputs]
+    y0 = ss_sys.state_trafos[1](t0, inp_values, y0_orig)
+    return y0
+
+
+def calc_original_state(sim_results, ss_sys):
+    # check whether state has been altered
+    if ss_sys.state_trafos is None:
+        return sim_results.y
+
+    # recover input trajectories
+    input_traj = np.zeros((len(sim_results.t), len(ss_sys.inputs)))
+    for idx, inp in ss_sys.inputs:
+        vals = ss_sys.input_map[inp].get_results(sim_results.t)
+        input_traj[idx] = vals
+
+    # recover transformed state trajectory
+    state_traj = sim_results.y
+
+    # for now, use a loop
+    orig_traj = np.zeros((len(sim_results.t), len(ss_sys.orig_state)))
+    for idx, t in sim_results.t:
+        orig_traj[idx] = ss_sys.state_trafos[1](t,
+                                                input_traj[idx],
+                                                state_traj[idx])
+
+    return orig_traj
 
 
 def _convert_derivatives(new_forms):
@@ -805,31 +885,33 @@ def _convert_derivatives(new_forms):
     return new_forms, targets
 
 
-def _find_weights(new_forms):
-    state_elems = set()
-    for form in new_forms:
+def _find_weights(expressions):
+    weights = set()
+    for form in expressions:
         funcs = form.atoms(sp.Function)
         for f in funcs:
-            if _weight_letter in str(f) and f.args[0] == time:
-                state_elems.add(f)
-    return state_elems
+            if (isinstance(f.func, sp.function.UndefinedFunction)
+                    and _weight_letter in str(f)
+                    and f.args[0] == time):
+                weights.add(f)
+    return weights
 
 
 def _find_inputs(weak_forms):
     """ Find system inputs """
     inputs = set()
-    for eq in weak_forms:
-        _inputs = [_inp for _inp in eq.atoms(sp.Function)
-                   if _input_letter in str(_inp)]
-        inputs.update(_inputs)
+    for _inp in weak_forms.atoms(sp.Function):
+        if (isinstance(_inp.func, sp.function.UndefinedFunction)
+               and _input_letter in str(_inp.func)):
+            inputs.add(_inp)
 
     return inputs
 
 
-def _find_integrals(weak_forms):
+def _find_integrals(expressions):
     """ Find fake integrals """
     integrals = set()
-    for eq in weak_forms:
+    for eq in expressions:
         ints = [_int for _int in eq.atoms(FakeIntegral)]
         integrals.update(ints)
 
@@ -853,6 +935,7 @@ def _convert_higher_derivative(weak_forms, derivative):
 
     target_set = set()
     subs_list = []
+    new_forms = weak_forms
 
     expr = derivative.args[0]
     order = len(derivative.args) - 1
@@ -867,8 +950,9 @@ def _convert_higher_derivative(weak_forms, derivative):
             red_deriv = derivative.func(*derivative.args[:-1])
             new_eq = new_var - red_deriv
             new_der = new_var.diff(time)
-            new_forms = [form.xreplace({derivative: new_der})
-                         for form in weak_forms]
+            new_forms = weak_forms.xreplace({derivative: new_der})
+            # new_forms = [form.xreplace({derivative: new_der})
+            #              for form in weak_forms]
             new_forms.append(new_eq)
 
             # replace remaining derivative
@@ -883,11 +967,11 @@ def _convert_higher_derivative(weak_forms, derivative):
             subs_list += subs_pairs
             target_set.update(new_targets)
         else:
-            new_forms = weak_forms
             target_set.add(derivative)
 
     elif _input_letter in str(expr):
-        raise NotImplementedError
+        warnings.warn("Temporal input derivative detected, this may cause"
+                      "problems later on.")
 
     elif _function_letter in str(expr) or _test_function_letter in str(expr):
         # derive the associated callbacks
@@ -900,8 +984,11 @@ def _convert_higher_derivative(weak_forms, derivative):
         callback = expr.func._imp_
         d_func.func._imp_ = staticmethod(callback.derive(order))
         subs_pair = derivative, d_func
-        new_forms = [form.replace(*subs_pair) for form in weak_forms]
+        new_forms = weak_forms.xreplace({derivative: d_func})
+        # new_forms = [form.replace(*subs_pair) for form in weak_forms]
         subs_list += [subs_pair]
+    else:
+        raise NotImplementedError
 
     return new_forms, subs_list, target_set
 
@@ -917,7 +1004,8 @@ def _simplify_integrals(weak_forms):
             subs_dict[integral] = red_int
 
     # red_forms = [f.subs(subs_list) for f in weak_forms]
-    red_forms = [f.xreplace(subs_dict) for f in weak_forms]
+    # red_forms = [f.xreplace(subs_dict) for f in weak_forms]
+    red_forms = weak_forms.xreplace(subs_dict)
     return red_forms
 
 
@@ -930,7 +1018,7 @@ def _solve_integrals(weak_forms):
         solved_map[integral] = res
 
     # tqdm.write(">>> substituting the solutions")
-    subs_forms = [f.xreplace(solved_map) for f in weak_forms]
+    subs_forms = weak_forms.xreplace(solved_map)
 
     return subs_forms
 
@@ -1016,16 +1104,86 @@ def _approximate_term(term, sym):
     return ser
 
 
-def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
+def _eliminate_input_derivatives(input_derivatives, weak_forms, old_state, inputs):
+    """
+    Try to perform a generalized state transformation to eliminate derivatives
+    Args:
+        weak_forms:
+        inputs:
+
+    Returns:
+
+    """
+    new_state = sp.Matrix(get_weights(len(old_state)))
+    old_expr = old_state
+    new_expr = new_state
+    neut_term = 0 * new_state
+    for der in input_derivatives:
+        dep, ret = _analyse_term_structure(weak_forms, der)
+        if dep == "linear":
+            new_expr += ret * der.args[0]
+            old_expr -= ret * der.args[0]
+            neut_term += ret * der
+    # print(new_state)
+
+    # substitute new state
+    fwd_map = {old: new for old, new in zip(old_state, new_expr)}
+    rev_map = {new: old for new, old in zip(new_state, old_expr)}
+    new_forms = weak_forms.xreplace(fwd_map) - neut_term
+    # print(new_forms)
+
+    # build generalized transformations
+    inp_dummies = {inp: sp.Dummy() for inp in inputs}
+    orig_dummies = {s: sp.Dummy() for s in old_state}
+    new_dummies = {s: sp.Dummy() for s in new_state}
+    subs_map = {**inp_dummies, **orig_dummies, **new_dummies}
+
+    fwd_args = ([time],
+                [inp_dummies[s] for s in input_derivatives],
+                [orig_dummies[s] for s in old_state])
+    fwd_expr = new_expr.xreplace(subs_map)
+    fwd_cb = sp.lambdify(fwd_args, expr=fwd_expr, modules="numpy")
+
+    rev_args = ([time],
+                [inp_dummies[s] for s in input_derivatives],
+                [new_dummies[s] for s in new_state])
+    rev_expr = new_expr.xreplace(subs_map)
+    rev_cb = sp.lambdify(rev_args, expr=rev_expr, modules="numpy")
+
+    return new_forms, new_state, (fwd_cb, rev_cb)
+
+
+def _analyse_term_structure(weak_forms, term):
+    # try to get coefficient matrix
+    coeffs = sp.Matrix([f.coeff(term) for f in weak_forms])
+    if time not in coeffs.free_symbols:
+        # bingo, linear dependency
+        return "linear", coeffs
+    elif not any([_weight_letter in str(s) for s in coeffs.free_symbols]):
+        # some time dependent factors but now state members
+        print(coeffs)
+        raise NotImplementedError
+    else:
+        # multiplicative coupling, use inverse product rule
+        print(coeffs)
+        raise NotImplementedError
+
+
+def simulate_state_space(ss_sys, y0, time_dom):
     """
     Simulate an ODE system given its right-hand side
 
     """
+    rhs_expr = ss_sys.rhs
+    input_dict = ss_sys.input_map
+    inputs = ss_sys.inputs
+    state = ss_sys.state
+
     # build expressions
     input_mapping = {inp: sp.Dummy() for inp in inputs}
     state_mapping = {s: sp.Dummy() for s in state}
     subs_map = {**input_mapping, **state_mapping}
-    dummy_rhs = sp.Matrix([eq.xreplace(subs_map) for eq in rhs_expr])
+    dummy_rhs = rhs_expr.xreplace(subs_map)
 
     args = [time,
             [input_mapping[inp] for inp in inputs],
@@ -1040,17 +1198,16 @@ def simulate_state_space(time_dom, rhs_expr, ics, input_dict, inputs, state):
     jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
 
     def _rhs(t, y):
-        u = [input_dict[inp](t, y) for inp in inputs]
+        print(t)
+        u = [input_dict[inp](time=t, weights=y) for inp in inputs]
         y_dt = np.ravel(rhs_cb(t, u, y))
         return y_dt
 
     def _jac(t, y):
-        u = [input_dict[inp](t, y) for inp in inputs]
+        u = [input_dict[inp](time=t, weights=y) for inp in inputs]
         jac = jac_cb(t, u, y)
         return jac
 
-    print(">>> projecting initial states")
-    y0 = get_state(ics, state)
 
     print(">>> running time step simulation")
     res = solve_ivp(fun=_rhs,

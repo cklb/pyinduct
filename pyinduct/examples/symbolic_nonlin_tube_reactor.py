@@ -150,7 +150,7 @@ if __name__ == "__main__" or test_examples:
 
 
     # define some bases
-    domain = pi.Domain((0, 0.15), num=10)
+    domain = pi.Domain((0, 0.15), num=3)
     base = pi.LagrangeNthOrder.cure_interval(domain, order=1)
     pi.register_base("fem_base", base)
     # for i in range(1, 5):
@@ -184,8 +184,7 @@ if __name__ == "__main__" or test_examples:
     z = ss.space[0]
 
     u1, u2, u3 = [ss.get_input() for i in range(3)]
-    x1, x2, x4 = [ss.get_field_variable(z) for i in range(3)]
-    x3 = sp.Function("x3")(t)
+    x1, x2, x3, x4 = [ss.get_field_variable(z, t) for i in range(4)]
 
     ACat = 0.15 * 0.15
     eps = 0.64504929009858025
@@ -208,17 +207,17 @@ if __name__ == "__main__" or test_examples:
     }
 
     # boundary conditions
-    bc_x1 = sp.Eq(sp.Subs(x1, z, 0), u1)
-    bc_x2 = sp.Eq(sp.Subs(x2, z, 0), u2)
-    bc_x4 = sp.Eq(sp.Subs(x4, z, 0), u3)
+    bc_x1 = sp.Eq(sp.Subs(x1.diff(z), z, 0), u1)
+    bc_x2 = sp.Eq(sp.Subs(x2.diff(z), z, 0), u2)
+    bc_x4 = sp.Eq(sp.Subs(x4.diff(z), z, 0), u3)
 
     x_1 = ss.create_approximation(z, "fem_base", [bc_x1])
     x_2 = ss.create_approximation(z, "fem_base", [bc_x2])
-    x_3 = ss.get_weight()
+    x_3 = ss.create_approximation(z, "fem_base", [])
     x_4 = ss.create_approximation(z, "fem_base", [bc_x4])
     approximations = [x_1, x_2, x_3, x_4]
 
-    psi1, psi2, psi4 = [ss.get_test_function(z) for i in range(3)]
+    psi1, psi2, psi3, psi4 = [ss.get_test_function(z) for i in range(4)]
 
     base_var_map = {
         x1: x_1,
@@ -227,6 +226,7 @@ if __name__ == "__main__" or test_examples:
         x4: x_4,
         psi1: x_1.base,
         psi2: x_2.base,
+        psi3: x_3.base,
         psi4: x_4.base,
     }
 
@@ -236,8 +236,14 @@ if __name__ == "__main__" or test_examples:
                + u1 * psi1.subs(z, 0)
                + ss.InnerProduct(x1, psi1.diff(z), domain.bounds)
                )
-        - Omega * k1 * sp.exp(-E1 / R * (1 / x4 - 1 / x4_ref)) * x1 * (1 - x3)
-        + Omega * k2 * sp.exp(-E2 / R * (1 / x4 - 1 / x4_ref) * (1 - alpha * x3)) * x3
+        - Omega * k1 * ss.InnerProduct(
+              sp.exp(-E1 / R * (1 / x4 - 1 / x4_ref)) * x1 * (1 - x3),
+              psi1,
+        domain.bounds)
+        + Omega * k2 * ss.InnerProduct(
+              sp.exp(-E2 / R * (1 / x4 - 1 / x4_ref) * (1 - alpha * x3)) * x3,
+              psi1,
+        domain.bounds)
     )
     if 0:
         # weak formulations
@@ -266,7 +272,10 @@ if __name__ == "__main__" or test_examples:
                + u2 * psi2.subs(z, 0)
                + ss.InnerProduct(x2, psi2.diff(z), domain.bounds)
                )
-        - Omega * k3 * sp.exp(-E3 / R * (1 / x4 - 1 / x4_ref)) * x3 * x2
+        - Omega * k3 * ss.InnerProduct(
+            sp.exp(-E3 / R * (1 / x4 - 1 / x4_ref)) * x3 * x2,
+            psi2,
+    domain.bounds)
     )
     if 0:
         wf2 = WeakFormulation([
@@ -286,11 +295,21 @@ if __name__ == "__main__" or test_examples:
         ], name="x_2")
 
     wf3 = (
-        - x3.diff(t)
-        + k1 * sp.exp(-E1 / R * (1 / x4 - 1 / x4_ref)) * x1 * (1 - x3)
-        - k2 * sp.exp(-E2 / R * (1 / x4 - 1 / x4_ref) * (1 - alpha * x3)) * x3
-        - k3 * sp.exp(-E3 / R * (1 / x4 - 1 / x4_ref)) * x3 * x2
-        - k4 * sp.exp(-E4 / R * (1 / x4 - 1 / x4_ref)) * x3
+        - ss.InnerProduct(x3.diff(t), psi3, domain.bounds)
+        + k1 * ss.InnerProduct(
+        sp.exp(-E1 / R * (1 / x4 - 1 / x4_ref)) * x1 * (1 - x3),
+        psi3,
+        domain.bounds)
+        - k2 * ss.InnerProduct(
+        sp.exp(-E2 / R * (1 / x4 - 1 / x4_ref) * (1 - alpha * x3)) * x3,
+        psi3,
+        domain.bounds)
+        - k3 * ss.InnerProduct(sp.exp(-E3 / R * (1 / x4 - 1 / x4_ref)) * x3 * x2,
+                               psi3,
+                               domain.bounds)
+        - k4 * ss.InnerProduct(sp.exp(-E4 / R * (1 / x4 - 1 / x4_ref)) * x3,
+                               psi3,
+                               domain.bounds)
     )
     if 0:
         wf3 = WeakFormulation([
@@ -347,6 +366,7 @@ if __name__ == "__main__" or test_examples:
     sys, state, inputs = ss.create_first_order_system(rep_eqs)
 
     temp_domain = pi.Domain((0, 10), num=101)
+    np.seterr(under="warn", over="warn")
     res = ss.simulate_state_space(temp_domain, sys, ic_dict, input_dict,
                                   inputs, state)
 

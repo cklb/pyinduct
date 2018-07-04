@@ -98,7 +98,6 @@ for idx, (x, u, phi) in enumerate(zip([x1_zt, x2_zt],
             - ss.InnerProduct(x.diff(z), phi.diff(z), zb_dom)
         )
         - gamma_t.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, zb_dom)
-        + sp.cos(t)
     )
     equations.append(expr)
 
@@ -128,24 +127,17 @@ rep_dict = {
     x2_zt: x2_approx,
     phi_1kz: x1_test,
     phi_2kz: x2_test,
+    gamma_t: gamma_approx
 }
 
 rep_eqs = ss.substitute_approximations(equations, rep_dict)
 print(rep_eqs)
 
-sys, state, inputs = ss.create_first_order_system(rep_eqs)
-sp.pprint(inputs)
-sp.pprint(state)
-# sp.pprint(sys, num_columns=200)
-
-if 0:
-    data = str(inputs), str(state), str(sys)
-    with open("symb_test_N={}.pkl".format(N), "wb") as f:
-        pickle.dump(data, f)
-    quit()
+ss_sys = ss.create_first_order_system(rep_eqs)
+# sp.pprint(ss_sys.rhs, num_columns=200)
 
 # define the initial conditions for each approximation
-ic_dict = {
+ss_sys.ics = {
     x1_approx: lambda z: -10,
     # x1_approx: -10 + 10*z,
     x2_approx: lambda z: 10,
@@ -156,24 +148,37 @@ ic_dict = {
 # define the system inputs and their mapping
 def controller_factory(idx, gain):
 
-    def control_law(t, weights):
+    def control_law(**kwargs):
         """ Top notch boundary feedback """
-        return -gain * weights[idx]
+        return -gain * kwargs["weights"][idx]
 
     return control_law
 
+def feedfoward_factory(val):
 
-input_dict = {
-    u1_t: lambda t, w: -500,
-    u2_t: lambda t, w: 0,
+    def ff_law(**kwargs):
+        """ Top notch boundary feedback """
+        return val
+
+    return ff_law
+
+
+ss_sys.input_map = {
+    u1_t: feedfoward_factory(-500),
+    u2_t: feedfoward_factory(0),
     # u1_t: controller_factory(0, 1),
     # u2_t: controller_factory(-1, 1),
 }
 
+if 0:
+    data = str(inputs), str(state), str(sys)
+    with open("symb_test_N={}.pkl".format(N), "wb") as f:
+        pickle.dump(data, f)
+    quit()
+
 # run the simulation
 np.seterr(under="warn")
-res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
-                                      inputs, state)
+res_weights = ss.simulate_state_space(ss_sys, temp_dom)
 t_dom = pi.Domain(points=res_weights.t)
 
 # post processing
@@ -186,7 +191,7 @@ if 0:
 else:
     approximations = [x1_approx, x2_approx]
 
-weight_dict = ss._sort_weights(res_weights.y, state, approximations)
+weight_dict = ss._sort_weights(res_weights.y, ss_sys.state, approximations)
 results = ss._evaluate_approximations(weight_dict, approximations, t_dom, nodes)
 gamma_sim = res_weights.y[-1]
 pg.plot(t_dom.points, gamma_sim)

@@ -178,8 +178,11 @@ class LumpedApproximation:
         self._base_map = base_map
         self._bcs = bcs
 
+        # check for extra dependencies
+        self._extra_args = list(_find_inputs(bcs))
+
         # substitute all known functions and symbols and generate callback
-        self._cb = sp.lambdify(self._syms + self.weights,
+        self._cb = sp.lambdify(self._syms + self.weights + self._extra_args,
                                self.expression.subs(get_parameters()),
                                modules="numpy")
 
@@ -190,6 +193,10 @@ class LumpedApproximation:
     @property
     def weights(self):
         return self._weights
+
+    @property
+    def extra_args(self):
+        return self._extra_args
 
     @property
     def base_map(self):
@@ -657,11 +664,12 @@ def substitute_approximations(weak_form, mapping):
 
     # create substitution lists
     rep_list = []
-    # subs_list = []
+    approximations = []
     for sym, approx in ext_mapping.items():
         if isinstance(approx, LumpedApproximation):
             rep_list += [gen_func_subs_pair(*bc.args) for bc in approx.bcs]
             rep_list.append(gen_func_subs_pair(sym, approx.expression))
+            approximations.append(approx)
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
@@ -674,7 +682,7 @@ def substitute_approximations(weak_form, mapping):
 
         rep_eqs.append(rep_eq.doit())
 
-    return sp.Matrix(rep_eqs)
+    return sp.Matrix(rep_eqs), approximations
 
 
 def _expand_kth_terms(weak_form, mapping):
@@ -813,7 +821,7 @@ def create_first_order_system(weak_forms, input_map):
 def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 
     # build complete form
-    rep_eqs = substitute_approximations(weak_forms, approx_map)
+    rep_eqs, approximations = substitute_approximations(weak_forms, approx_map)
 
     # convert to state space system
     ss_sys = create_first_order_system(rep_eqs, input_map)
@@ -828,10 +836,10 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     t_dom = Domain(points=res_weights.t)
 
     # extract original state
-    state_traj = calc_original_state(res_weights, ss_sys)
+    state_traj, input_traj = calc_original_state(res_weights, ss_sys)
 
-    weight_dict = _sort_weights(res_weights.y, ss_sys.state, [x_approx])
-    results = _evaluate_approximations(weight_dict, [x_approx], t_dom, spat_dom)
+    weight_dict, extra_dict = _sort_weights(state_traj, input_traj, ss_sys, approximations)
+    results = _evaluate_approximations(weight_dict, extra_dict, approximations, t_dom, spat_dom)
 
     return results
 
@@ -839,34 +847,34 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 def calc_initial_sate(ss_sys, ics, t0):
     print(">>> projecting initial states")
     y0_orig = get_state(ics, ss_sys.orig_state)
-    inp_values = [ss_sys.input_dict[inp](time=t0, weights=y0_orig)
+    inp_values = [ss_sys.input_map[inp](time=t0, weights=y0_orig)
                   for inp in ss_sys.inputs]
-    y0 = ss_sys.state_trafos[1](t0, inp_values, y0_orig)
+    y0 = np.squeeze(ss_sys.transformations[0](t0, inp_values, y0_orig))
     return y0
 
 
 def calc_original_state(sim_results, ss_sys):
     # check whether state has been altered
-    if ss_sys.state_trafos is None:
+    if ss_sys.transformations is None:
         return sim_results.y
 
     # recover input trajectories
     input_traj = np.zeros((len(sim_results.t), len(ss_sys.inputs)))
-    for idx, inp in ss_sys.inputs:
+    for idx, inp in enumerate(ss_sys.inputs):
         vals = ss_sys.input_map[inp].get_results(sim_results.t)
-        input_traj[idx] = vals
+        input_traj[:, idx] = vals
 
     # recover transformed state trajectory
-    state_traj = sim_results.y
+    state_traj = sim_results.y.T
 
     # for now, use a loop
     orig_traj = np.zeros((len(sim_results.t), len(ss_sys.orig_state)))
-    for idx, t in sim_results.t:
-        orig_traj[idx] = ss_sys.state_trafos[1](t,
-                                                input_traj[idx],
-                                                state_traj[idx])
+    for idx, t in enumerate(sim_results.t):
+        orig_traj[idx] = np.squeeze(ss_sys.transformations[1](t,
+                                                              input_traj[idx],
+                                                              state_traj[idx]))
 
-    return orig_traj
+    return orig_traj, input_traj
 
 
 def _convert_derivatives(new_forms):
@@ -897,13 +905,14 @@ def _find_weights(expressions):
     return weights
 
 
-def _find_inputs(weak_forms):
+def _find_inputs(expressions):
     """ Find system inputs """
     inputs = set()
-    for _inp in weak_forms.atoms(sp.Function):
-        if (isinstance(_inp.func, sp.function.UndefinedFunction)
-               and _input_letter in str(_inp.func)):
-            inputs.add(_inp)
+    for expr in expressions:
+        for _inp in expr.atoms(sp.Function):
+            if (isinstance(_inp.func, sp.function.UndefinedFunction)
+                   and _input_letter in str(_inp.func)):
+                inputs.add(_inp)
 
     return inputs
 
@@ -1104,7 +1113,7 @@ def _approximate_term(term, sym):
     return ser
 
 
-def _eliminate_input_derivatives(input_derivatives, weak_forms, old_state, inputs):
+def _eliminate_input_derivatives(input_derivatives, weak_forms, orig_state, inputs):
     """
     Try to perform a generalized state transformation to eliminate derivatives
     Args:
@@ -1114,9 +1123,9 @@ def _eliminate_input_derivatives(input_derivatives, weak_forms, old_state, input
     Returns:
 
     """
-    new_state = sp.Matrix(get_weights(len(old_state)))
-    old_expr = old_state
-    new_expr = new_state
+    new_state = sp.Matrix(get_weights(len(orig_state)))
+    old_expr = new_state
+    new_expr = orig_state
     neut_term = 0 * new_state
     for der in input_derivatives:
         dep, ret = _analyse_term_structure(weak_forms, der)
@@ -1127,27 +1136,27 @@ def _eliminate_input_derivatives(input_derivatives, weak_forms, old_state, input
     # print(new_state)
 
     # substitute new state
-    fwd_map = {old: new for old, new in zip(old_state, new_expr)}
+    fwd_map = {old: new for old, new in zip(orig_state, new_expr)}
     rev_map = {new: old for new, old in zip(new_state, old_expr)}
     new_forms = weak_forms.xreplace(fwd_map) - neut_term
     # print(new_forms)
 
     # build generalized transformations
     inp_dummies = {inp: sp.Dummy() for inp in inputs}
-    orig_dummies = {s: sp.Dummy() for s in old_state}
+    orig_dummies = {s: sp.Dummy() for s in orig_state}
     new_dummies = {s: sp.Dummy() for s in new_state}
     subs_map = {**inp_dummies, **orig_dummies, **new_dummies}
 
     fwd_args = ([time],
-                [inp_dummies[s] for s in input_derivatives],
-                [orig_dummies[s] for s in old_state])
+                [inp_dummies[s] for s in inputs],
+                [orig_dummies[s] for s in orig_state])
     fwd_expr = new_expr.xreplace(subs_map)
     fwd_cb = sp.lambdify(fwd_args, expr=fwd_expr, modules="numpy")
 
     rev_args = ([time],
-                [inp_dummies[s] for s in input_derivatives],
+                [inp_dummies[s] for s in inputs],
                 [new_dummies[s] for s in new_state])
-    rev_expr = new_expr.xreplace(subs_map)
+    rev_expr = old_expr.xreplace(subs_map)
     rev_cb = sp.lambdify(rev_args, expr=rev_expr, modules="numpy")
 
     return new_forms, new_state, (fwd_cb, rev_cb)
@@ -1174,20 +1183,15 @@ def simulate_state_space(ss_sys, y0, time_dom):
     Simulate an ODE system given its right-hand side
 
     """
-    rhs_expr = ss_sys.rhs
-    input_dict = ss_sys.input_map
-    inputs = ss_sys.inputs
-    state = ss_sys.state
-
     # build expressions
-    input_mapping = {inp: sp.Dummy() for inp in inputs}
-    state_mapping = {s: sp.Dummy() for s in state}
+    input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
+    state_mapping = {s: sp.Dummy() for s in ss_sys.state}
     subs_map = {**input_mapping, **state_mapping}
-    dummy_rhs = rhs_expr.xreplace(subs_map)
+    dummy_rhs = ss_sys.rhs.xreplace(subs_map)
 
     args = [time,
-            [input_mapping[inp] for inp in inputs],
-            [state_mapping[st] for st in state]
+            [input_mapping[inp] for inp in ss_sys.inputs],
+            [state_mapping[st] for st in ss_sys.state]
             ]
     rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
     # rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="sympy", dummify=False)
@@ -1199,17 +1203,17 @@ def simulate_state_space(ss_sys, y0, time_dom):
 
     def _rhs(t, y):
         print(t)
-        u = [input_dict[inp](time=t, weights=y) for inp in inputs]
+        u = [ss_sys.input_map[inp](time=t, weights=y) for inp in ss_sys.inputs]
         y_dt = np.ravel(rhs_cb(t, u, y))
         return y_dt
 
     def _jac(t, y):
-        u = [input_dict[inp](time=t, weights=y) for inp in inputs]
+        u = [ss_sys.input_map[inp](time=t, weights=y) for inp in ss_sys.inputs]
         jac = jac_cb(t, u, y)
         return jac
 
-
     print(">>> running time step simulation")
+    np.seterr(under="warn")
     res = solve_ivp(fun=_rhs,
                     y0=y0,
                     t_span=time_dom.bounds,
@@ -1252,23 +1256,32 @@ def get_state(approx_map, state):
     return y0
 
 
-def _sort_weights(weights, state, approximations):
+def _sort_weights(weights, inp_values, ss_sys, approximations):
     """ Coordinate a given weight set with approximations """
     weight_dict = dict()
-    state_elements = list(state)
+    extra_dict = dict()
+    state_elements = list(ss_sys.state)
+    inputs = list(ss_sys.inputs)
     for approx in approximations:
         a_lbls = approx.weights
         a_weights = []
         for lbl in a_lbls:
             idx = state_elements.index(lbl)
-            a_weights.append(weights[idx])
+            a_weights.append(weights[:, idx])
 
-        weight_dict[approx] = np.array(a_weights)
+        i_lbls = approx.extra_args
+        i_values = []
+        for lbl in i_lbls:
+            idx = inputs.index(lbl)
+            i_values.append(inp_values[:, idx])
 
-    return weight_dict
+        weight_dict[approx] = np.array(a_weights).T
+        extra_dict[approx] = np.array(i_values).T
+
+    return weight_dict, extra_dict
 
 
-def _evaluate_approximations(weight_dict, approximations, temp_dom, spat_doms):
+def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, spat_doms):
     """
     Evaluate approximations on the given grids
     """
@@ -1281,17 +1294,22 @@ def _evaluate_approximations(weight_dict, approximations, temp_dom, spat_doms):
     all_dims = [len(dom) for dom in all_coords]
     grids = np.meshgrid(*all_coords, indexing="ij")
     r_grids = [grid.ravel() for grid in grids]
+    spat_dim = len(grids) - 1
 
     for approx in approximations:
         weight_mat = weight_dict[approx]
-        temp_dim = weight_mat.shape[0]
-        args = np.zeros(len(grids) - 1 + temp_dim)
+        temp_dim = weight_mat.shape[1]
+        extra_mat = extra_dict[approx]
+        extra_dim = extra_mat.shape[1]
+        args = np.zeros(spat_dim + temp_dim + extra_dim)
         res = np.zeros(len(r_grids[0]))
         for coord_idx in range(len(r_grids[0])):
             # fill spatial parameters
-            args[:-temp_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
+            args[:spat_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
             # fill weights
-            args[-temp_dim:] = weight_mat[:, r_grids[-1][coord_idx]]
+            args[spat_dim:spat_dim+temp_dim] = weight_mat[r_grids[-1][coord_idx]]
+            # fill extras
+            args[-extra_dim:] = extra_mat[r_grids[-1][coord_idx]]
             # resolve values
             res[coord_idx] = approx(*args)
 

@@ -6,7 +6,7 @@ import pyinduct.sym_simulation as ss
 from matplotlib import pyplot as plt
 
 # approximation order
-N = 3
+N = 10
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -37,7 +37,7 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries = [
-    sp.Eq(sp.Subs(x, z, spat_bounds[0], evaluate=False), -u1),
+    sp.Eq(sp.Subs(x, z, spat_bounds[0], evaluate=False), u1),
     # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -u1),
 ]
 
@@ -48,17 +48,25 @@ pi.register_base("fem", fem_base)
 # create approximations, homogenizing where needed
 x_approx = ss.create_approximation(z, "fem", boundaries)
 
-# define initial conditions
-# x0 = 1e-1 * sp.sin(z*sp.pi)
-# x0 = 10 * z
-x0 = lambda _z: 10
+# define the initial conditions for each approximation
+ics = {
+    # x_approx: 1e-1 * sp.sin(z*sp.pi)
+    x_approx: 10,
+    u1: 10
+}
+
+# define the system inputs and their mapping
+input_map = {
+    u1: pi.ConstantTrajectory(const=10)
+}
 
 if 0:
-    state0 = x_approx.approximate_function(x0)
-    a = x_approx.get_spatial_approx(state0)
+    state0 = x_approx.approximate_function(ics[x_approx], input_map[u1](time=0))
+    a = x_approx.get_spatial_approx(state0, input_map[u1](time=0))
     vals = np.linspace(*spat_bounds)
     plt.plot(vals, a(vals))
     plt.show()
+    quit()
 
 v = -1
 
@@ -79,23 +87,12 @@ rep_dict = {
     phi_k: x_approx.base,
 }
 
-# define the initial conditions for each approximation
-ics = {
-    x_approx: x0
-}
-
 
 def controller(t, weights):
     """ Top notch boundary feedback """
     # k = 1e2
     k = 0
     return -k * weights[0]
-
-
-# define the system inputs and their mapping
-input_map = {
-    u1: pi.ConstantTrajectory(const=10)
-}
 
 results = ss.simulate_system(weak_form, rep_dict, input_map, ics,
                              temp_dom, spat_dom)

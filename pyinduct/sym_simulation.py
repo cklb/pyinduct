@@ -218,30 +218,30 @@ class LumpedApproximation:
         if kwargs:
             return self._cb(*[kwargs[w] for w in self._weights])
 
-    def approximate_function(self, func):
+    def approximate_function(self, func, extra_args=()):
         """
         Project the given function into the subspace of this Approximation
 
         Args:
             func(sp.Function): Function expression to approximate
+            extra_args(list): Extra arguments needed for evaluation.
         """
-        if isinstance(func, sp.Basic):
-            hom_func = (func - self._ess_expr).subs(get_parameters())
-            cb = sp.lambdify(hom_func.free_symbols, hom_func)
-            # else:
-            #     retval = hom_func.evalf()
-            #     def _dummy(*args):
-            #         return retval
-            #     cb = _dummy
-        else:
-            # lets hope that it is callable somehow
-            cb = func
+        f = sp.sympify(func)
+        hom_func = (f - self._ess_expr).subs(get_parameters())
+        hom_func = hom_func.subs(list(zip(self._extra_args, extra_args)))
+        cb = sp.lambdify(self._syms, hom_func, modules="numpy")
 
         weights = project_on_base(Function(cb), Base(self.base))
         return weights
 
-    def get_spatial_approx(self, weights):
-        expr = self.expression.subs(list(zip(self.weights, weights))).subs(get_parameters())
+    def get_spatial_approx(self, weights, extra_args):
+        def spat_eval(*syms):
+            return self._cb(syms, weights, extra_args)
+
+        # return spat_eval
+        expr = self.expression.subs(get_parameters())
+        expr = expr.subs(list(zip(self.weights, weights))
+                         + list(zip(self.extra_args, extra_args)))
         return sp.lambdify(self._syms, expr, modules="numpy")
 
     # def subs(self, *args):
@@ -846,10 +846,9 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 
 def calc_initial_sate(ss_sys, ics, t0):
     print(">>> projecting initial states")
-    y0_orig = get_state(ics, ss_sys.orig_state)
-    inp_values = [ss_sys.input_map[inp](time=t0, weights=y0_orig)
-                  for inp in ss_sys.inputs]
-    y0 = np.squeeze(ss_sys.transformations[0](t0, inp_values, y0_orig))
+    u0 = [ics.pop(u) for u in ss_sys.inputs if u in ics]
+    y0_orig = get_state(ics, ss_sys.orig_state, u0)
+    y0 = np.squeeze(ss_sys.transformations[0](t0, u0, y0_orig))
     return y0
 
 
@@ -1228,7 +1227,7 @@ def simulate_state_space(ss_sys, y0, time_dom):
     return res
 
 
-def get_state(approx_map, state):
+def get_state(approx_map, state, extra_args):
     """
     Build initial state vector for time step simulation
 
@@ -1245,7 +1244,7 @@ def get_state(approx_map, state):
     init_weights = dict()
     for key, val in approx_map.items():
         if isinstance(key, LumpedApproximation):
-            _weight_set = key.approximate_function(val)
+            _weight_set = key.approximate_function(val, extra_args)
             new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
         elif _weight_letter in str(key):
             new_d = {key: val}

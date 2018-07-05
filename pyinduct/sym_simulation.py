@@ -179,7 +179,7 @@ class LumpedApproximation:
         self._bcs = bcs
 
         # check for extra dependencies
-        self._extra_args = list(_find_inputs(bcs))
+        self._extra_args = list(_find_inputs([self.expression]))
 
         # substitute all known functions and symbols and generate callback
         self._cb = sp.lambdify(self._syms + self.weights + self._extra_args,
@@ -479,7 +479,7 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
             else:
                 raise NotImplementedError
 
-            if res != 0:
+            if not np.isclose(float(res), 0):
                 ess_pairs.append((cond, func))
                 ess_idxs.append(idx)
 
@@ -1307,7 +1307,10 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
         weight_mat = weight_dict[approx]
         temp_dim = weight_mat.shape[1]
         extra_mat = extra_dict[approx]
-        extra_dim = extra_mat.shape[1]
+        if extra_mat:
+            extra_dim = extra_mat.shape[1]
+        else:
+            extra_dim = 0
         args = np.zeros(spat_dim + temp_dim + extra_dim)
         res = np.zeros(len(r_grids[0]))
         for coord_idx in range(len(r_grids[0])):
@@ -1315,8 +1318,10 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
             args[:spat_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
             # fill weights
             args[spat_dim:spat_dim+temp_dim] = weight_mat[r_grids[-1][coord_idx]]
-            # fill extras
-            args[-extra_dim:] = extra_mat[r_grids[-1][coord_idx]]
+            if extra_mat:
+                # fill extras
+                args[-extra_dim:] = extra_mat[r_grids[-1][coord_idx]]
+
             # resolve values
             res[coord_idx] = approx(*args)
 

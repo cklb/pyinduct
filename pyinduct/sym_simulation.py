@@ -218,7 +218,7 @@ class LumpedApproximation:
         if kwargs:
             return self._cb(*[kwargs[w] for w in self._weights])
 
-    def approximate_function(self, func, extra_args=()):
+    def approximate_function(self, func, *extra_args):
         """
         Project the given function into the subspace of this Approximation
 
@@ -234,7 +234,7 @@ class LumpedApproximation:
         weights = project_on_base(Function(cb), Base(self.base))
         return weights
 
-    def get_spatial_approx(self, weights, extra_args):
+    def get_spatial_approx(self, weights, *extra_args):
         def spat_eval(*syms):
             return self._cb(syms, weights, extra_args)
 
@@ -483,14 +483,14 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
                 ess_pairs.append((cond, func))
                 ess_idxs.append(idx)
 
-        if len(ess_pairs) < len(ess_bcs):
-            # no suitable base fraction for homogenisation found, create one
-            inhom_pos = pos
-            hom_pos = next((p for p in boundary_positions if p != pos))
-            hom_frac = create_hom_func(sym, inhom_pos, hom_pos)
-            ess_pairs.append((cond, hom_frac))
+    if len(ess_pairs) < len(ess_bcs):
+        # no suitable base fraction for homogenisation found, create one
+        inhom_pos = pos
+        hom_pos = next((p for p in boundary_positions if p != pos))
+        hom_frac = create_hom_func(sym, inhom_pos, hom_pos)
+        ess_pairs.append((cond, hom_frac))
 
-        assert len(ess_pairs) == len(ess_bcs)
+    assert len(ess_pairs) == len(ess_bcs)
 
     base_mapping = {}
 
@@ -806,7 +806,7 @@ def create_first_order_system(weak_forms, input_map):
             sorted_state,
             inputs)
     else:
-        state_maps = None
+        state_trafos = tuple()
 
     ss_sys = Bunch(rhs=ss_form,
                    state=sorted_state,
@@ -848,8 +848,11 @@ def calc_initial_sate(ss_sys, ics, t0):
     print(">>> projecting initial states")
     u0 = [ics.pop(u) for u in ss_sys.inputs if u in ics]
     y0_orig = get_state(ics, ss_sys.orig_state, u0)
-    y0 = np.squeeze(ss_sys.transformations[0](t0, u0, y0_orig))
-    return y0
+    if ss_sys.transformations:
+        y0 = np.squeeze(ss_sys.transformations[0](t0, u0, y0_orig))
+        return y0
+    else:
+        return y0_orig
 
 
 def calc_original_state(sim_results, ss_sys):
@@ -866,12 +869,16 @@ def calc_original_state(sim_results, ss_sys):
     # recover transformed state trajectory
     state_traj = sim_results.y.T
 
-    # for now, use a loop
-    orig_traj = np.zeros((len(sim_results.t), len(ss_sys.orig_state)))
-    for idx, t in enumerate(sim_results.t):
-        orig_traj[idx] = np.squeeze(ss_sys.transformations[1](t,
-                                                              input_traj[idx],
-                                                              state_traj[idx]))
+    if ss_sys.transformations:
+        # for now, use a loop
+        orig_traj = np.zeros((len(sim_results.t), len(ss_sys.orig_state)))
+        for idx, t in enumerate(sim_results.t):
+            val = np.squeeze(ss_sys.transformations[1](t,
+                                                       input_traj[idx],
+                                                       state_traj[idx]))
+            orig_traj[idx] = val
+    else:
+        orig_traj = state_traj
 
     return orig_traj, input_traj
 
@@ -899,6 +906,7 @@ def _find_weights(expressions):
         for f in funcs:
             if (isinstance(f.func, sp.function.UndefinedFunction)
                     and _weight_letter in str(f)
+                    and len(f.args) == 1
                     and f.args[0] == time):
                 weights.add(f)
     return weights
@@ -1218,7 +1226,7 @@ def simulate_state_space(ss_sys, y0, time_dom):
                     t_span=time_dom.bounds,
                     t_eval=time_dom.points,
                     # jac=_jac,
-                    # method="BDF"
+                    method="LSODA",
                     )
     if not res.success:
         warnings.warn("Integration failed at t={} with '{}'".format(

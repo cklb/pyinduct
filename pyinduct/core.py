@@ -1693,7 +1693,7 @@ def complex_wrapper(func):
 
 class Bunch(dict):
     """
-    Subclassof dict for easy handling of data
+    Subclass of dict for easy handling of data
 
     Stolen from scipy.optimize.OptimizeResult
     """

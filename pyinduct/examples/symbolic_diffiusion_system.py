@@ -5,8 +5,22 @@ import pyinduct as pi
 import pyinduct.sym_simulation as ss
 from matplotlib import pyplot as plt
 
+
+class Controller(pi.SimulationInput):
+
+    def __init__(self, gain, idx):
+        super().__init__("BC")
+        self.gain = gain
+        self.idx = idx
+
+    def _calc_output(self, **kwargs):
+        """ Top notch boundary feedback """
+        ret = -self.gain * kwargs["weights"][self.idx]
+        return dict(output=ret)
+
+
 # approximation order
-N = 3
+N = 5
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -32,7 +46,8 @@ phi_k = ss.get_test_function(z)
 alpha = sp.symbols("alpha", real=True)
 param_list = [
     (alpha, .1),
-    # ("enable_approx", True),
+    # parameters for approximation of nonlinearities
+    ("enable_approx", True),
     ("approx_pos", .5),
     ("approx_order", 2),
 ]
@@ -56,10 +71,18 @@ pi.register_base("fem", fem_base)
 # create approximations, homogenizing where needed
 x_approx = ss.create_approximation(z, "fem", boundaries)
 
-# define initial conditions
-# x0 = 1e-1 * sp.sin(z*sp.pi)
-# x0 = 10 * z
-x0 = lambda _z: 10
+# define the initial conditions for each approximation
+ics = {
+    x_approx: .1
+    # x_approx: 10 *z
+    # x_approx: 1e-1 * sp.sin(z*sp.pi)
+}
+
+# define the system inputs and their mapping
+input_dict = {
+    u1: Controller(1, 0),
+    u2: Controller(1, -1)
+}
 
 if 0:
     state0 = x_approx.approximate_function(x0)
@@ -71,10 +94,11 @@ if 0:
 # some spatial dependent coefficients
 # a0 = sp.sin(z)
 
-# some variants for nonlinearities
-# a0 = 0
+# some variants for nonlinearities, most of them unstable
+a0 = 0
 # a0 = 1
 # a0 = (1 + 10 * x)
+# a0 = x
 # a0 = x**2
 # a0 = sp.cos(x)
 # a0 = sp.cos(t)
@@ -86,7 +110,7 @@ weak_form = [
     - alpha * ((x.diff(z)*phi_k).subs(z, 1)
                - (x.diff(z)*phi_k).subs(z, 0)
                - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds))
-    - ss.InnerProduct(sp.exp(-x), phi_k, spat_bounds)
+    - ss.InnerProduct(a0 * x, phi_k, spat_bounds)
 ]
 sp.pprint(weak_form, num_columns=200)
 
@@ -97,51 +121,8 @@ rep_dict = {
     phi_k: x_test,
 }
 
-# create full system of equations
-rep_eqs = ss.substitute_approximations(weak_form, rep_dict)
-# sp.pprint(rep_eqs, num_columns=200)
-
-# transform into generalised state-space form
-sys, state, inputs = ss.create_first_order_system(rep_eqs)
-sp.pprint(inputs)
-sp.pprint(state)
-sp.pprint(sys, num_columns=200)
-
-if 0:
-    A, b = sp.linear_eq_to_matrix(sys, *state)
-    A = np.array(A).astype(float)
-    print(A)
-    eigs = np.linalg.eigvals(A)
-    print(eigs)
-
-# define the initial conditions for each approximation
-ic_dict = {
-    x_approx: x0
-}
-
-# define the system inputs and their mapping
-
-def controller(t, weights):
-    """ Top notch boundary feedback """
-    # k = 1e2
-    k = 0
-    return -k * weights[0]
-
-
-input_dict = {
-    u1: controller,
-    u2: controller
-}
-
-# run the simulation
-np.seterr(under="warn")
-res_weights = ss.simulate_state_space(temp_dom, sys, ic_dict, input_dict,
-                                      inputs, state)
-
-
-t_dom = pi.Domain(points=res_weights.t)
-weight_dict = ss._sort_weights(res_weights.y, state, [x_approx])
-results = ss._evaluate_approximations(weight_dict, [x_approx], t_dom, spat_dom)
+results = ss.simulate_system(weak_form, rep_dict, input_dict, ics, temp_dom,
+                             spat_dom)
 
 win = pi.PgAnimatedPlot(results)
 wins = pi.PgSurfacePlot(results[0])

@@ -39,6 +39,7 @@ ss.register_parameters(*param_list)
 boundaries = [
     sp.Eq(sp.Subs(x, z, spat_bounds[0], evaluate=False), u1),
     # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -u1),
+    sp.Eq(sp.Subs(x, z, spat_bounds[1], evaluate=False), 0),
 ]
 
 nodes = pi.Domain(spat_bounds, num=N)
@@ -51,8 +52,8 @@ x_approx = ss.create_approximation(z, "fem", boundaries)
 # define the initial conditions for each approximation
 ics = {
     # x_approx: 1e-1 * sp.sin(z*sp.pi)
-    x_approx: 10,
-    u1: 10
+    x_approx: 10 * sp.cos(.5*z*sp.pi),
+    # u1: 10
 }
 
 # define the system inputs and their mapping
@@ -61,22 +62,24 @@ input_map = {
 }
 
 if 0:
-    state0 = x_approx.approximate_function(ics[x_approx], input_map[u1](time=0))
-    a = x_approx.get_spatial_approx(state0, input_map[u1](time=0))
-    vals = np.linspace(*spat_bounds)
+    # state0 = x_approx.approximate_function(ics[x_approx], [ics[u1]])
+    # a = x_approx.get_spatial_approx(state0, [ics[u1]])
+    state0 = x_approx.approximate_function(ics[x_approx])
+    a = x_approx.get_spatial_approx(state0)
+    vals = np.linspace(*spat_bounds, num=1000)
     plt.plot(vals, a(vals))
     plt.show()
     quit()
 
-v = -1
+v = 1
 
 # define the variational formulation for both phases
 weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds) - v * (
         ss.InnerProduct(x.diff(z), phi_k, spat_bounds)
-        # (x * phi_k).subs(z, 1)
-        # - (x * phi_k).subs(z, 0)
-        # - ss.InnerProduct(x, phi_k.diff(z), spat_bounds)
+        # (x.diff(z) * phi_k).subs(z, 1)
+        # - (x.diff(z) * phi_k).subs(z, 0)
+        # - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds)
     )
 ]
 sp.pprint(weak_form, num_columns=200)
@@ -93,6 +96,7 @@ def controller(t, weights):
     # k = 1e2
     k = 0
     return -k * weights[0]
+
 
 results = ss.simulate_system(weak_form, rep_dict, input_map, ics,
                              temp_dom, spat_dom)

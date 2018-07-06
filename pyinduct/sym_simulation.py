@@ -38,11 +38,24 @@ def register_parameters(*args, **kwargs):
         _parameters.update(kwargs)
 
 
+def get_parameter(param):
+    return _parameters.get(param, None)
+
+
+def get_parameters(*args):
+    if not args:
+        # return _parameters.items()
+        return _parameters
+    else:
+        return [_parameters.get(arg, None) for arg in args]
+
+
 # fraction database
 _fraction_map = {}
 
 
 def get_base_fraction_symbol(frac, *syms):
+    global _fraction_map
     if not isinstance(frac, Function):
         return frac
 
@@ -54,18 +67,6 @@ def get_base_fraction_symbol(frac, *syms):
     _fraction_map.update({frac: func})
 
     return func
-
-
-def get_parameter(param):
-    return _parameters.get(param, None)
-
-
-def get_parameters(*args):
-    if not args:
-        # return _parameters.items()
-        return _parameters
-    else:
-        return [_parameters.get(arg, None) for arg in args]
 
 
 _weight_cnt = 0
@@ -365,19 +366,14 @@ class FakeIntegral(sp.Integral):
         # build callback for spatial integration
         f = sp.lambdify([sym] + eval_args, kernel, modules="numpy")
 
-        # TODO the nonzero logic only holds for a product of functions
         # extract domains
-        mul_term = isinstance(kernel, sp.Mul)
         domain = {(-np.inf, np.inf)}
-        nonzero = domain
         for func in kernel.atoms(sp.Function):
             if hasattr(func, "_imp_"):
                 new_dom = func._imp_.domain
                 domain = domain_intersection(domain, new_dom)
-                if mul_term:
-                    new_nonzero = func._imp_.nonzero
-                    nonzero = domain_intersection(nonzero, new_nonzero)
 
+        nonzero = self.get_nonzero_area(kernel)
         kernel_domain = domain_intersection(domain, nonzero)
 
         # kernel is zero or undefined on the whole region of the integral
@@ -406,6 +402,44 @@ class FakeIntegral(sp.Integral):
         int_func = get_lambda(*eval_args)
         int_func.func._imp_ = staticmethod(_eval_integral)
         return int_func
+
+    def get_nonzero_area(self, kernel):
+        """
+        TODO propagate nonzero areas through the expression
+        For example:
+            k=f1(z) * f2(z) -> N(k) = N(f1) ^ N(f2)
+            k=f1(z) + f2(z) -> N(k) = N(f1) v N(f2)
+        or more general:
+            k=g(f1(z)) -> N(k) = N(g(f1))
+        """
+        if isinstance(kernel, sp.Function):
+            if hasattr(kernel.func, "_imp_"):
+                n_area = kernel.func._imp_.nonzero
+                return n_area
+
+        if not kernel.args:
+            # end of expr tree
+            return {(-np.inf, np.inf)}
+
+        areas = []
+        for arg in kernel.args:
+            area = self.get_nonzero_area(arg)
+            areas.append(area)
+
+        if isinstance(kernel, sp.Add):
+            # take the union
+            return set(*areas)
+        elif isinstance(kernel, sp.Mul):
+            # take the intersections
+            res = {(-np.inf, np.inf)}
+            for a in areas:
+                res = domain_intersection(res, a)
+            return res
+        elif isinstance(kernel, sp.Pow):
+            # propagate the arguments area
+            return areas[0]
+        else:
+            raise NotImplementedError(kernel)
 
 
 class Lagrange1stOrder(sp.Piecewise):
@@ -812,7 +846,7 @@ def create_first_order_system(weak_forms, input_map):
         # rep_map = {t: d for t, d in zip(sorted_targets, dummy_targets)}
         print("\t-collecting coefficient matrices")
         A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
-        if 1:
+        if 0:
             sp.pprint(A, num_columns=200)
             a, c = sp.linear_eq_to_matrix(b, *sorted_state)
             sp.pprint(a, num_columns=200)
@@ -1045,7 +1079,7 @@ def _convert_higher_derivative(weak_forms, derivative):
 
             elif _test_function_letter in str(expr):
                 d_func = get_test_function(*expr.args)
-
+            callback = expr.func._imp_
             d_func.func._imp_ = staticmethod(callback.derive(order))
 
         subs_pair = derivative, d_func

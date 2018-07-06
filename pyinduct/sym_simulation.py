@@ -405,7 +405,8 @@ class FakeIntegral(sp.Integral):
 
     def get_nonzero_area(self, kernel):
         """
-        TODO propagate nonzero areas through the expression
+        Identify nonzero area by propagating nonzero areas through the expression
+
         For example:
             k=f1(z) * f2(z) -> N(k) = N(f1) ^ N(f2)
             k=f1(z) + f2(z) -> N(k) = N(f1) v N(f2)
@@ -918,6 +919,7 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 
 def process_results(approximations, input_traj, spat_dom, ss_sys, state_traj,
                     t_dom):
+    print(">>> processing simulation results")
     weight_dict, extra_dict = _sort_weights(state_traj, input_traj, ss_sys,
                                             approximations)
     results = _evaluate_approximations(weight_dict, extra_dict, approximations,
@@ -1418,29 +1420,23 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
     all_dims = [len(dom) for dom in all_coords]
     grids = np.meshgrid(*all_coords, indexing="ij")
     r_grids = [grid.ravel() for grid in grids]
-    spat_dim = len(grids) - 1
 
     for approx in approximations:
         weight_mat = weight_dict[approx]
-        temp_dim = weight_mat.shape[1]
         extra_mat = extra_dict[approx]
+        args = np.hstack((np.array(r_grids[:-1]).T,
+                          weight_mat[r_grids[-1]]
+                          ))
         if extra_mat:
-            extra_dim = extra_mat.shape[1]
-        else:
-            extra_dim = 0
-        args = np.zeros(spat_dim + temp_dim + extra_dim)
-        res = np.zeros(len(r_grids[0]))
-        for coord_idx in range(len(r_grids[0])):
-            # fill spatial parameters
-            args[:spat_dim] = [r_grid[coord_idx] for r_grid in r_grids[:-1]]
-            # fill weights
-            args[spat_dim:spat_dim+temp_dim] = weight_mat[r_grids[-1][coord_idx]]
-            if extra_mat:
-                # fill extras
-                args[-extra_dim:] = extra_mat[r_grids[-1][coord_idx]]
+            args = np.hstack((args, extra_mat[r_grids[-1]]))
 
-            # resolve values
-            res[coord_idx] = approx(*args)
+        if 0:
+            # lambdified functions do not like vectorial input
+            res = approx(*args)
+        else:
+            res = np.zeros(len(r_grids[0]))
+            for idx, row in enumerate(args):
+                res[idx] = approx(*row)
 
         # per convention the time axis comes first
         out_data = np.moveaxis(res.reshape(all_dims), -1, 0)

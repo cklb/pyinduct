@@ -430,16 +430,14 @@ class FakeIntegral(sp.Integral):
             areas.append(area)
 
         if isinstance(kernel, sp.Add):
-            # take the union
             return domain_simplification(set.union(*areas))
         elif isinstance(kernel, sp.Mul):
-            # take the intersections
             res = {(-np.inf, np.inf)}
             for a in areas:
                 res = domain_intersection(res, a)
             return res
         elif isinstance(kernel, (sp.Pow, sp.Function)):
-            # propagate the arguments area
+            # propagate the argument's area
             return areas[0]
         else:
             raise NotImplementedError(kernel)

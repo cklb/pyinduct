@@ -102,9 +102,9 @@ a0 = 0
 # a0 = (1 + 10 * x)
 # a0 = x
 # a0 = x**2
-a0 = sp.cos(x)
+# a0 = sp.cos(x)
 # a0 = sp.cos(t)
-# a0 = 2*x**2 + sp.exp(x)
+# a0 = -2*x**2 + sp.exp(x)
 
 # define the variational formulation for both phases
 weak_form = [

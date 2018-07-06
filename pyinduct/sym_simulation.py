@@ -1197,11 +1197,25 @@ def _approximate_term(term, sym):
     """
     n = get_parameter("approx_order")
     pos = get_parameter("approx_pos")
+    mode = get_parameter("approx_mode")
 
     warnings.warn("Approximating term {} at {}={} with order n={}".format(
         term, sym, pos, n))
-    ser = sp.series(term, x=sym, x0=pos, n=n).removeO()
-    return ser
+
+    if mode == "series":
+        res = sp.series(term, x=sym, x0=pos, n=n).removeO()
+    elif mode == "pointwise":
+        assert isinstance(term, sp.Function)
+        weights = _find_weights([term])
+        coeffs = {w: term.args[0].coeff(w) for w in weights}
+
+        # rebuild expression
+        res = sp.Add(*[coeffs[w] * term.func(w) for w in weights])
+
+        residual = term.args[0] - sp.Add(*[coeffs[w] * w for w in weights])
+        assert residual == 0
+
+    return res
 
 
 def _eliminate_input_derivatives(input_derivatives, weak_forms, orig_state, inputs):

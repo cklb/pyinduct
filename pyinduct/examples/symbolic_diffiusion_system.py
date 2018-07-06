@@ -1,3 +1,4 @@
+import pickle
 import sympy as sp
 # import symengine as sp
 import numpy as np
@@ -48,6 +49,9 @@ param_list = [
     (alpha, .1),
     # parameters for approximation of nonlinearities
     # ("enable_approx", True),
+    ("enable_approx", False),
+    # ("approx_mode", "series"),
+    ("approx_mode", "pointwise"),
     ("approx_pos", .5),
     ("approx_order", 2),
 ]
@@ -97,12 +101,12 @@ if 0:
 # a0 = sp.sin(z)
 
 # some variants for nonlinearities, most of them unstable
-a0 = 0
+# a0 = 0
 # a0 = 1
 # a0 = (1 + 10 * x)
 # a0 = x
 # a0 = x**2
-# a0 = sp.cos(x)
+a0 = sp.cos(x)
 # a0 = sp.cos(t)
 # a0 = -2*x**2 + sp.exp(x)
 
@@ -125,6 +129,10 @@ rep_dict = {
 
 results = ss.simulate_system(weak_form, rep_dict, input_dict, ics, temp_dom,
                              spat_dom)
+
+with open("diff_sys_approx.pkl", "wb") as f:
+    pickle.dump(results, f)
+
 
 win = pi.PgAnimatedPlot(results)
 wins = pi.PgSurfacePlot(results[0])

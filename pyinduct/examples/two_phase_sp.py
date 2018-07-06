@@ -8,7 +8,7 @@ import pyinduct.sym_simulation as ss
 import pyqtgraph as pg
 
 # approximation order
-N = 20
+N = 10
 
 # spatial domains
 spat_dom = pi.Domain((0, 1), num=N)

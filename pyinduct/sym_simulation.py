@@ -35,6 +35,24 @@ def register_parameters(*args, **kwargs):
         _parameters.update(kwargs)
 
 
+# fraction database
+_fraction_map = {}
+
+
+def get_base_fraction_symbol(frac, *syms):
+    if not isinstance(frac, Function):
+        return frac
+
+    if frac in _fraction_map:
+        return _fraction_map[frac]
+
+    func = get_function(*syms)
+    func.func._imp_ = staticmethod(frac)
+    _fraction_map.update({frac: func})
+
+    return func
+
+
 def get_parameter(param):
     return _parameters.get(param, None)
 
@@ -372,6 +390,8 @@ class FakeIntegral(sp.Integral):
         if not eval_args:
             return _eval_integral()
 
+        warnings.warn("Creating integral callback for evaluation at runtime")
+
         int_func = get_lambda(*eval_args)
         int_func.func._imp_ = staticmethod(_eval_integral)
         return int_func
@@ -497,11 +517,7 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     # inhomogeneous parts that are to be excluded
     x_ess = 0
     for cond, func in ess_pairs:
-        if isinstance(func, Function):
-            d_func = get_function(sym)
-            d_func.func._imp_ = staticmethod(func)
-        else:
-            d_func = func
+        d_func = get_base_fraction_symbol(func, sym)
         x_ess += cond[1] * d_func
         base_mapping[d_func] = func, True
 
@@ -513,11 +529,7 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     if weights is None:
         weights = get_weights(len(nat_funcs))
     for idx, func in enumerate(nat_funcs):
-        if isinstance(func, Function):
-            d_func = get_function(sym)
-            d_func.func._imp_ = staticmethod(func)
-        else:
-            d_func = func
+        d_func = get_base_fraction_symbol(func, sym)
         x_nat += weights[idx] * d_func
         base_mapping[d_func] = func, False
 
@@ -729,10 +741,9 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     mappings = {}
     for expr in expressions:
         if equation.atoms(symbol):
-            _g = get_test_function(*symbol.args)
-            if isinstance(expr, Function):
-                _g.func._imp_ = staticmethod(expr)
-            else:
+            _g = get_base_fraction_symbol(expr, *symbol.args)
+            if not isinstance(expr, Function):
+                _g = get_test_function(*symbol.args)
                 mappings[_g] = expr
 
             r_tpl = symbol.func, _g.func
@@ -958,17 +969,15 @@ def _convert_higher_derivative(weak_forms, derivative):
 
     if _weight_letter in str(expr):
         if order > 1:
-            # c1_dd = ...
+            # c1_dd = f()
             # c1_d = c2
             # -> c1_dd = c2_d
-            # -> c2_d = ...
+            # -> c2_d = f()
             new_var = get_weight()
             red_deriv = derivative.func(*derivative.args[:-1])
             new_eq = new_var - red_deriv
             new_der = new_var.diff(time)
             new_forms = weak_forms.xreplace({derivative: new_der})
-            # new_forms = [form.xreplace({derivative: new_der})
-            #              for form in weak_forms]
             new_forms.append(new_eq)
 
             # replace remaining derivative

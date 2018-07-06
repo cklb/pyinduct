@@ -17,7 +17,9 @@ from jitcode import jitcode, t, y, UnsuccessfulIntegration
 from matplotlib import pyplot as plt
 
 from .registry import get_base
-from .core import (Domain, Function, Base, domain_intersection, integrate_function,
+from .core import (Domain, Function, Base,
+                   domain_simplification, domain_intersection,
+                   integrate_function,
                    project_on_base, EvalData, Bunch)
 from .simulation import simulate_state_space as old_ss_sim
 
@@ -429,7 +431,7 @@ class FakeIntegral(sp.Integral):
 
         if isinstance(kernel, sp.Add):
             # take the union
-            return set(*areas)
+            return domain_simplification(set.union(*areas))
         elif isinstance(kernel, sp.Mul):
             # take the intersections
             res = {(-np.inf, np.inf)}

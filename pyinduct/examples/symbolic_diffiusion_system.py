@@ -20,7 +20,7 @@ class Controller(pi.SimulationInput):
 
 
 # approximation order
-N = 3
+N = 5
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -47,7 +47,7 @@ alpha = sp.symbols("alpha", real=True)
 param_list = [
     (alpha, .1),
     # parameters for approximation of nonlinearities
-    ("enable_approx", True),
+    # ("enable_approx", True),
     ("approx_pos", .5),
     ("approx_order", 2),
 ]
@@ -102,7 +102,7 @@ a0 = 0
 # a0 = (1 + 10 * x)
 # a0 = x
 # a0 = x**2
-# a0 = sp.cos(x)
+a0 = sp.cos(x)
 # a0 = sp.cos(t)
 # a0 = 2*x**2 + sp.exp(x)
 

@@ -38,8 +38,7 @@ ss.register_parameters(*param_list)
 # define boundaries
 boundaries = [
     sp.Eq(sp.Subs(x, z, spat_bounds[0], evaluate=False), u1),
-    # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -u1),
-    sp.Eq(sp.Subs(x, z, spat_bounds[1], evaluate=False), 0),
+    # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), u1),
 ]
 
 nodes = pi.Domain(spat_bounds, num=N)
@@ -52,13 +51,15 @@ x_approx = ss.create_approximation(z, "fem", boundaries)
 # define the initial conditions for each approximation
 ics = {
     # x_approx: 1e-1 * sp.sin(z*sp.pi)
-    x_approx: 10 * sp.cos(.5*z*sp.pi),
-    # u1: 10
+    # x_approx: 10 * sp.cos(.5*z*sp.pi),
+    x_approx: 10,
+    u1: 10
 }
 
 # define the system inputs and their mapping
 input_map = {
-    u1: pi.ConstantTrajectory(const=10)
+    # u1: pi.ConstantTrajectory(const=0)
+    u1: pi.InterpolationTrajectory(temp_dom, 10*np.cos(2*temp_dom.points))
 }
 
 if 0:
@@ -71,15 +72,15 @@ if 0:
     plt.show()
     quit()
 
-v = 1
+v = -1
 
 # define the variational formulation for both phases
 weak_form = [
     ss.InnerProduct(x.diff(t), phi_k, spat_bounds) - v * (
-        ss.InnerProduct(x.diff(z), phi_k, spat_bounds)
-        # (x.diff(z) * phi_k).subs(z, 1)
-        # - (x.diff(z) * phi_k).subs(z, 0)
-        # - ss.InnerProduct(x.diff(z), phi_k.diff(z), spat_bounds)
+        # ss.InnerProduct(x.diff(z), phi_k, spat_bounds)
+        (x * phi_k).subs(z, 1)
+        - (x * phi_k).subs(z, 0)
+        - ss.InnerProduct(x, phi_k.diff(z), spat_bounds)
     )
 ]
 sp.pprint(weak_form, num_columns=200)
@@ -102,6 +103,10 @@ results = ss.simulate_system(weak_form, rep_dict, input_map, ics,
                              temp_dom, spat_dom)
 
 
+# plots = []
+# for res in results:
+#     p = plt.plot(res.input_data[1].points, res.output_data[0, :])
+#     plots.append(p)
 win = pi.PgAnimatedPlot(results)
 wins = pi.PgSurfacePlot(results[0])
 pi.show()

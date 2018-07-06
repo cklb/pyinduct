@@ -130,7 +130,7 @@ _input_letter = "_u"
 
 def get_input(*symbols):
     if not symbols:
-        symbols = [t]
+        symbols = [time]
     global _input_cnt
     u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
                     real=True)(*symbols)
@@ -436,7 +436,7 @@ class FakeIntegral(sp.Integral):
             for a in areas:
                 res = domain_intersection(res, a)
             return res
-        elif isinstance(kernel, sp.Pow):
+        elif isinstance(kernel, (sp.Pow, sp.Function)):
             # propagate the arguments area
             return areas[0]
         else:
@@ -1143,7 +1143,7 @@ def _reduce_kernel(integral):
     approx = get_parameter("enable_approx")
 
     kernel, (sym, a, b) = integral.args
-    if time not in kernel.free_symbols:
+    if time not in kernel.atoms(sp.Symbol):
         return integral
 
     kernel = kernel.expand()
@@ -1371,7 +1371,7 @@ def get_state(approx_map, state, extra_args):
     init_weights = dict()
     for key, val in approx_map.items():
         if isinstance(key, LumpedApproximation):
-            _weight_set = key.approximate_function(val, extra_args)
+            _weight_set = key.approximate_function(val, *extra_args)
             new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
         elif _weight_letter in str(key):
             new_d = {key: val}
@@ -1427,7 +1427,7 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
         args = np.hstack((np.array(r_grids[:-1]).T,
                           weight_mat[r_grids[-1]]
                           ))
-        if extra_mat:
+        if len(extra_mat) > 0:
             args = np.hstack((args, extra_mat[r_grids[-1]]))
 
         if 0:

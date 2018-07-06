@@ -20,7 +20,7 @@ class Controller(pi.SimulationInput):
 
 
 # approximation order
-N = 19
+N = 17
 
 temp_dom = pi.Domain((0, 5), num=100)
 

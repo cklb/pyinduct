@@ -367,35 +367,35 @@ class FakeIntegral(sp.Integral):
 
         # TODO the nonzero logic only holds for a product of functions
         # extract domains
-        # assert not isinstance(kernel, sp.Add)
+        mul_term = isinstance(kernel, sp.Mul)
         domain = {(-np.inf, np.inf)}
-        # nonzero = domain
+        nonzero = domain
         for func in kernel.atoms(sp.Function):
             if hasattr(func, "_imp_"):
                 new_dom = func._imp_.domain
                 domain = domain_intersection(domain, new_dom)
-                # nonzero = domain_intersection(nonzero, func._imp_.nonzero)
+                if mul_term:
+                    new_nonzero = func._imp_.nonzero
+                    nonzero = domain_intersection(nonzero, new_nonzero)
 
-        # kernel_domain = domain_intersection(domain, nonzero)
-        kernel_domain = domain
+        kernel_domain = domain_intersection(domain, nonzero)
+
+        # kernel is zero or undefined on the whole region of the integral
+        if not kernel_domain:
+            return 0
 
         # build dummy function that will compute the integral
         def _eval_integral(*args):
             up_a, up_b = [lim.subs(zip(eval_args, args)) for lim in [a, b]]
             integral_domain = {(float(up_a), float(up_b))}
             interval = domain_intersection(kernel_domain, integral_domain)
-            if interval:
-                if 0:
-                 reg = next(iter(interval))
-                 x_vals = np.linspace(float(a), float(b))
-                 plt.plot(x_vals, f(x_vals).T)
-                 plt.axhline(xmin=reg[0], xmax=reg[1], c="r")
-                 plt.show()
-                res, err = integrate_function(f, interval, args=args)
-            else:
-                # kernel is zero or undefined on the whole region of the integral
-                res = 0
-
+            if 0:
+                reg = next(iter(interval))
+                x_vals = np.linspace(float(a), float(b))
+                plt.plot(x_vals, f(x_vals).T)
+                plt.axhline(xmin=reg[0], xmax=reg[1], c="r")
+                plt.show()
+            res, err = integrate_function(f, interval, args=args)
             return res
 
         if not eval_args:
@@ -810,13 +810,17 @@ def create_first_order_system(weak_forms, input_map):
     else:
         sorted_targets = [s.diff(time) for s in sorted_state]
         # rep_map = {t: d for t, d in zip(sorted_targets, dummy_targets)}
-        print("-collecting coefficient matrices")
+        print("\t-collecting coefficient matrices")
         A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
-        print("-solving equation system")
+        if 1:
+            sp.pprint(A, num_columns=200)
+            a, c = sp.linear_eq_to_matrix(b, *sorted_state)
+            sp.pprint(a, num_columns=200)
+            sp.pprint(c, num_columns=200)
+            quit()
+
+        print("\t-solving equation system")
         ss_form = A.LUsolve(b)
-        # dummy_targets = [sp.Dummy() for t in sorted_targets]
-        # ss_form = sp.linsolve((A, b), dummy_targets)
-        # ss_form = sp.inv_quick(A) @ b
 
     input_derivatives = [d for d in _find_derivatives(weak_forms, time)
                          if d.args[0] in inputs]
@@ -1031,18 +1035,21 @@ def _convert_higher_derivative(weak_forms, derivative):
                       "problems later on.")
 
     elif _function_letter in str(expr) or _test_function_letter in str(expr):
-        # derive the associated callbacks
-        if _function_letter in str(expr):
-            d_func = get_function(*expr.args)
+        if 1:
+            callback = expr.func._imp_.derive(order)
+            d_func = get_base_fraction_symbol(callback, *expr.args)
+        else:
+            # derive the associated callbacks
+            if _function_letter in str(expr):
+                d_func = get_function(*expr.args)
 
-        elif _test_function_letter in str(expr):
-            d_func = get_test_function(*expr.args)
+            elif _test_function_letter in str(expr):
+                d_func = get_test_function(*expr.args)
 
-        callback = expr.func._imp_
-        d_func.func._imp_ = staticmethod(callback.derive(order))
+            d_func.func._imp_ = staticmethod(callback.derive(order))
+
         subs_pair = derivative, d_func
         new_forms = weak_forms.xreplace({derivative: d_func})
-        # new_forms = [form.replace(*subs_pair) for form in weak_forms]
         subs_list += [subs_pair]
     else:
         raise NotImplementedError

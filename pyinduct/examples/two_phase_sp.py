@@ -8,7 +8,7 @@ import pyinduct.sym_simulation as ss
 import pyqtgraph as pg
 
 # approximation order
-N = 10
+N = 5
 
 # spatial domains
 spat_dom = pi.Domain((0, 1), num=N)
@@ -82,8 +82,8 @@ gamma_approx = ss.get_weight()
 
 # define the initial conditions for each approximation
 ics = {
-    x1_approx: -10,
-    x2_approx: 10,
+    x1_approx: -10 * (1-z),
+    x2_approx: 10 * (1-z),
     gamma_approx: .5
 }
 

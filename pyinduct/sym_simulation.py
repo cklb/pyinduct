@@ -6,17 +6,20 @@ from time import clock
 from copy import copy
 import warnings
 import sympy as sp
+from sympy.utilities.autowrap import autowrap
 # import symengine as sp
 from sympy.utilities.autowrap import ufuncify
 import numpy as np
-from scipy.integrate import solve_ivp
+from scipy.integrate import solve_ivp, ode
 from tqdm import tqdm
+from jitcode import jitcode, t, y, UnsuccessfulIntegration
 
 from matplotlib import pyplot as plt
 
 from .registry import get_base
 from .core import (Domain, Function, Base, domain_intersection, integrate_function,
                    project_on_base, EvalData, Bunch)
+from .simulation import simulate_state_space as old_ss_sim
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -124,10 +127,12 @@ _input_cnt = 0
 _input_letter = "_u"
 
 
-def get_input():
+def get_input(*symbols):
+    if not symbols:
+        symbols = [t]
     global _input_cnt
     u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
-                    real=True)(time)
+                    real=True)(*symbols)
     _input_cnt += 1
     return u
 
@@ -236,7 +241,7 @@ class LumpedApproximation:
         if kwargs:
             return self._cb(*[kwargs[w] for w in self._weights])
 
-    def approximate_function(self, func, *extra_args):
+    def approximate_function(self, func, *extra_args, use_collocation=False):
         """
         Project the given function into the subspace of this Approximation
 
@@ -247,6 +252,12 @@ class LumpedApproximation:
         f = sp.sympify(func)
         hom_func = (f - self._ess_expr).subs(get_parameters())
         hom_func = hom_func.subs(list(zip(self._extra_args, extra_args)))
+
+        # if use_collocation:
+        #     weights = []
+        #     for f in self.base:
+        #         w = f.evalf()
+
         cb = sp.lambdify(self._syms, hom_func, modules="numpy")
 
         weights = project_on_base(Function(cb), Base(self.base))
@@ -774,7 +785,7 @@ def create_first_order_system(weak_forms, input_map):
     # sp.pprint(new_forms, num_columns=200)
 
     print(">>> running remaining evaluations")
-    new_forms = new_forms.doit()
+    new_forms = _run_evaluations(new_forms)
     # sp.pprint(ss_form)
 
     print(">>> identifying inputs")
@@ -829,6 +840,21 @@ def create_first_order_system(weak_forms, input_map):
     return ss_sys
 
 
+def _run_evaluations(weak_forms):
+    new_forms = weak_forms.doit()
+
+    funcs = new_forms.atoms(sp.Function)
+    val_mapping = {}
+    for f in funcs:
+        # if all dependencies are satisfied, evaluate
+        if not f.free_symbols:
+            res = f.evalf()
+            val_mapping.update({f: res})
+
+    new_forms = new_forms.xreplace(val_mapping)
+    return new_forms
+
+
 def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 
     # build complete form
@@ -841,17 +867,23 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
 
     # simulate
-    res_weights = simulate_state_space(ss_sys, y0, temp_dom)
-
-    # post process
-    t_dom = Domain(points=res_weights.t)
+    t_dom, sim_state = simulate_state_space(ss_sys, y0, temp_dom)
 
     # extract original state
-    state_traj, input_traj = calc_original_state(res_weights, ss_sys)
+    state_traj, input_traj = calc_original_state(sim_state, ss_sys, t_dom)
 
-    weight_dict, extra_dict = _sort_weights(state_traj, input_traj, ss_sys, approximations)
-    results = _evaluate_approximations(weight_dict, extra_dict, approximations, t_dom, spat_dom)
+    results = process_results(approximations, input_traj, spat_dom, ss_sys,
+                              state_traj, t_dom)
 
+    return results
+
+
+def process_results(approximations, input_traj, spat_dom, ss_sys, state_traj,
+                    t_dom):
+    weight_dict, extra_dict = _sort_weights(state_traj, input_traj, ss_sys,
+                                            approximations)
+    results = _evaluate_approximations(weight_dict, extra_dict, approximations,
+                                       t_dom, spat_dom)
     return results
 
 
@@ -866,24 +898,24 @@ def calc_initial_sate(ss_sys, ics, t0):
         return y0_orig
 
 
-def calc_original_state(sim_results, ss_sys):
+def calc_original_state(sim_results, ss_sys, temp_dom):
     # check whether state has been altered
     if ss_sys.transformations is None:
-        return sim_results.y
+        return sim_results
 
     # recover input trajectories
-    input_traj = np.zeros((len(sim_results.t), len(ss_sys.inputs)))
+    input_traj = np.zeros((len(temp_dom), len(ss_sys.inputs)))
     for idx, inp in enumerate(ss_sys.inputs):
-        vals = ss_sys.input_map[inp].get_results(sim_results.t)
+        vals = ss_sys.input_map[inp].get_results(temp_dom)
         input_traj[:, idx] = vals
 
     # recover transformed state trajectory
-    state_traj = sim_results.y.T
+    state_traj = sim_results
 
     if ss_sys.transformations:
         # for now, use a loop
-        orig_traj = np.zeros((len(sim_results.t), len(ss_sys.orig_state)))
-        for idx, t in enumerate(sim_results.t):
+        orig_traj = np.zeros((len(temp_dom), len(ss_sys.orig_state)))
+        for idx, t in enumerate(temp_dom):
             val = np.squeeze(ss_sys.transformations[1](t,
                                                        input_traj[idx],
                                                        state_traj[idx]))
@@ -1194,54 +1226,89 @@ def _analyse_term_structure(weak_forms, term):
         raise NotImplementedError
 
 
-def simulate_state_space(ss_sys, y0, time_dom):
+def simulate_state_space(ss_sys, y0, temp_dom):
     """
     Simulate an ODE system given its right-hand side
 
     """
-    # build expressions
-    input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
-    state_mapping = {s: sp.Dummy() for s in ss_sys.state}
-    subs_map = {**input_mapping, **state_mapping}
-    dummy_rhs = ss_sys.rhs.xreplace(subs_map)
+    if 0:
+        """
+        JITCODE approch using compiled c code
+        However, calling a controller implemented in python reduces the speed 
+        gains
+        """
+        time_mapping = {time: t}
 
-    args = [time,
-            [input_mapping[inp] for inp in ss_sys.inputs],
-            [state_mapping[st] for st in ss_sys.state]
-            ]
-    rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
-    # rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="sympy", dummify=False)
-    # print(str(rhs_cb))
-    # quit()
+        def helper_factory(input_obj):
+            def input_wrapper(_t, _y):
+                return input_obj(time=t, weights=y)
 
-    rhs_jac = dummy_rhs.jacobian(args[-1])
-    jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
+            s_func = get_input(t, y)
+            s_func.func._imp_ = input_wrapper
 
-    def _rhs(t, y):
-        print(t)
-        u = [ss_sys.input_map[inp](time=t, weights=y) for inp in ss_sys.inputs]
-        y_dt = np.ravel(rhs_cb(t, u, y))
-        return y_dt
+        input_mapping = {inp: helper_factory(ss_sys.input_map[inp])
+                         for inp in ss_sys.inputs}
+        state_mapping = {s: y(idx) for idx, s in enumerate(ss_sys.state)}
+        subs_map = {**time_mapping, **input_mapping, **state_mapping}
+        jitcode_rhs = ss_sys.rhs.xreplace(subs_map)
+        ode = jitcode(jitcode_rhs)
+        ode.set_integrator("lsoda")
+        ode.set_initial_value(y0, temp_dom[0])
 
-    def _jac(t, y):
-        u = [ss_sys.input_map[inp](time=t, weights=y) for inp in ss_sys.inputs]
-        jac = jac_cb(t, u, y)
-        return jac
+        print(">>> running time step simulation")
+        np.seterr(under="warn")
+        res = []
+        t0 = clock()
+        try:
+            for _t in temp_dom:
+                res.append(ode.integrate(_t))
+        except UnsuccessfulIntegration:
+            warnings.warn("Simulation failed at {}".format(_t))
+        print("simulation took {}s".format(clock()-t0))
 
-    print(">>> running time step simulation")
-    np.seterr(under="warn")
-    res = solve_ivp(fun=_rhs,
-                    y0=y0,
-                    t_span=time_dom.bounds,
-                    t_eval=time_dom.points,
-                    # jac=_jac,
-                    method="LSODA",
-                    )
-    if not res.success:
-        warnings.warn("Integration failed at t={} with '{}'".format(
-            res.t[-1], res.message))
+        return np.array(res)
+    else:
+        print(">>> building expressions")
+        if 0:
+            A, b = sp.linear_eq_to_matrix(ss_sys.rhs, *ss_sys.state)
+            rhs = A @ ss_sys.state + b
+        else:
+            rhs = ss_sys.rhs
 
-    return res
+        input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
+        state_mapping = {s: sp.Dummy() for s in ss_sys.state}
+        subs_map = {**input_mapping, **state_mapping}
+
+        dummy_rhs = rhs.xreplace(subs_map)
+
+        args = [time,
+                [input_mapping[inp] for inp in ss_sys.inputs],
+                [state_mapping[st] for st in ss_sys.state]
+                ]
+        rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
+
+        def _rhs(_t, _q):
+            # print(_t)
+            _u = [ss_sys.input_map[inp](time=_t, weights=_q)
+                  for inp in ss_sys.inputs]
+            y_dt = np.ravel(rhs_cb(_t, _u, _q))
+            return y_dt
+
+        if 0:
+            rhs_jac = dummy_rhs.jacobian(args[-1])
+            jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
+
+            def _jac(t, y):
+                u = [ss_sys.input_map[inp](time=t, weights=y)
+                     for inp in ss_sys.inputs]
+                jac = jac_cb(t, u, y)
+                return jac
+
+            return _rhs, _jac
+
+        print(">>> running time step simulation")
+        t_dom, res = old_ss_sim(_rhs, y0, temp_dom)
+        return t_dom, res
 
 
 def get_state(approx_map, state, extra_args):

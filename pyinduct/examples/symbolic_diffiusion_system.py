@@ -20,7 +20,7 @@ class Controller(pi.SimulationInput):
 
 
 # approximation order
-N = 5
+N = 19
 
 temp_dom = pi.Domain((0, 5), num=100)
 
@@ -55,6 +55,8 @@ ss.register_parameters(*param_list)
 
 # define boundaries
 boundaries = [
+    # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -10),
+    # sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1], evaluate=False), 10),
     sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[0], evaluate=False), -u1),
     sp.Eq(sp.Subs(x.diff(z), z, spat_bounds[1], evaluate=False), u2),
 ]
@@ -73,7 +75,7 @@ x_approx = ss.create_approximation(z, "fem", boundaries)
 
 # define the initial conditions for each approximation
 ics = {
-    x_approx: .1
+    x_approx: 10
     # x_approx: 10 *z
     # x_approx: 1e-1 * sp.sin(z*sp.pi)
 }

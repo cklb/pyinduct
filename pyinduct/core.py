@@ -1855,6 +1855,8 @@ class EvalData:
         enable_extrapolation (bool): If True, internal interpolators will allow
             extrapolation. Otherwise, the last giben value will be repeated for
             1D cases and the result will be padded with zeros for cases > 1D.
+        fill_value: If invalid data is encountered, it will be replaced with
+            this value before interpolation is performed.
 
     Examples:
         When instantiating 1d EvalData objects, the list can be omitted
@@ -1909,7 +1911,8 @@ class EvalData:
     def __init__(self, input_data, output_data,
                  input_labels=None, input_units=None,
                  enable_extrapolation=False,
-                 fill_axes=False, name=None):
+                 fill_axes=False, fill_value=None,
+                 name=None):
         # check type and dimensions
         if isinstance(input_data, np.ndarray) and input_data.ndim == 1:
             # accept single array for single dimensional input
@@ -1960,8 +1963,8 @@ class EvalData:
 
         self.input_data = input_data
         self.output_data = output_data
-        self.min = output_data.min()
-        self.max = output_data.max()
+        self.min = np.nanmin(output_data)
+        self.max = np.nanmax(output_data)
 
         if len(input_data) == 1:
             if enable_extrapolation:
@@ -1969,11 +1972,12 @@ class EvalData:
             else:
                 fill_val = (output_data[0], output_data[-1])
 
-            self._interpolator = interp1d(input_data[0],
-                                          output_data,
-                                          axis=-1,
-                                          bounds_error=False,
-                                          fill_value=fill_val)
+            self._interpolator = interp1d(
+                input_data[0],
+                np.ma.fix_invalid(output_data, fill_value=fill_value),
+                axis=-1,
+                bounds_error=False,
+                fill_value=fill_val)
         elif len(input_data) == 2 and output_data.ndim == 2:
             # pure 2d case
             if enable_extrapolation:
@@ -1983,8 +1987,10 @@ class EvalData:
             if len(input_data[0]) > 3 and len(input_data[1]) > 3:
                 # special treatment for very common case (faster than interp2d)
                 # boundary values are used as fill values
-                self._interpolator = RectBivariateSpline(*input_data,
-                                                         output_data)
+                self._interpolator = RectBivariateSpline(
+                    *input_data,
+                    np.ma.fix_invalid(output_data, fill_value=fill_value)
+                )
             else:
                 # this will trigger nearest neighbour interpolation
                 fill_val = None
@@ -1995,11 +2001,12 @@ class EvalData:
                 #     Since the value has to be the same at every border
                     # fill_val = 0
 
-                self._interpolator = interp2d(input_data[0],
-                                              input_data[1],
-                                              output_data.T,
-                                              bounds_error=False,
-                                              fill_value=fill_val)
+                self._interpolator = interp2d(
+                    input_data[0],
+                    input_data[1],
+                    np.ma.fix_invalid(output_data.T, fill_value=fill_value),
+                    bounds_error=False,
+                    fill_value=fill_val)
         else:
             if enable_extrapolation:
                 fill_val = None
@@ -2007,10 +2014,11 @@ class EvalData:
                 # Since the value has to be the same at every border
                 fill_val = 0
 
-            self._interpolator = RegularGridInterpolator(input_data,
-                                                         output_data,
-                                                         bounds_error=False,
-                                                         fill_value=fill_val)
+            self._interpolator = RegularGridInterpolator(
+                input_data,
+                np.ma.fix_invalid(output_data, fill_value=fill_value),
+                bounds_error=False,
+                fill_value=fill_val)
 
         # handle names and units
         self.input_labels = input_labels

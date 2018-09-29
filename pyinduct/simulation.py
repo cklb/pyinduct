@@ -5,23 +5,26 @@ and functions for postprocessing of simulation data.
 
 import warnings
 from abc import ABCMeta, abstractmethod
-from collections import OrderedDict
+from collections import OrderedDict, Callable
 from copy import copy
 from itertools import chain
+from tqdm import tqdm
 
 import numpy as np
 from scipy.integrate import ode
 from scipy.interpolate import interp1d
 from scipy.linalg import block_diag
 
-from .core import (Domain, Parameters, Function, integrate_function,
+from .core import (Domain, Parameters, Function,
+                   domain_intersection, integrate_function,
                    calculate_scalar_product_matrix,
                    dot_product_l2, sanitize_input,
                    StackedBase, get_weight_transformation,
                    get_transformation_info,
                    EvalData, project_on_bases)
 from .placeholder import (Scalars, TestFunction, Input, FieldVariable,
-                          EquationTerm, get_common_target, get_common_form)
+                          EquationTerm, ScalarTerm, IntegralTerm,
+                          get_common_target, get_common_form)
 from .registry import get_base, register_base
 
 __all__ = ["SimulationInput", "SimulationInputSum", "WeakFormulation",
@@ -104,10 +107,17 @@ class SimulationInput(object, metaclass=ABCMeta):
         Return:
             Corresponding function values to the given time steps.
         """
-        func = interp1d(np.array(self._time_storage),
-                        np.array(self._value_storage[result_key]),
+        t_data = np.array(self._time_storage)
+        res_data = np.array(self._value_storage[result_key])
+        invalid_idxs = np.logical_not(np.isnan(res_data))
+        mask = [np.all(a) for a in invalid_idxs]
+
+        func = interp1d(t_data[mask],
+                        res_data[mask],
                         kind=interpolation,
                         assume_sorted=False,
+                        bounds_error=False,
+                        fill_value=(res_data[mask][0], res_data[mask][-1]),
                         axis=0)
         values = func(time_steps)
 
@@ -193,13 +203,14 @@ class StateSpace(object):
             for the corresponding powers of :math:`\boldsymbol{x}`
         b_matrices (dict): Cascaded dictionary for the input matrices :math:`\boldsymbol{B}_{j, k}` in the sequence:
             temporal derivative order, exponent .
-        input_handle:  function handle, returning the system input :math:`u(t)`
+        input_handles (np.ndarray):  (Array of) callables for the the system
+            inputs :math:`u(t)`.
         c_matrix: :math:`\boldsymbol{C}`
         d_matrix: :math:`\boldsymbol{D}`
     """
 
     def __init__(self, a_matrices, b_matrices, base_lbl=None,
-                 input_handle=None, c_matrix=None, d_matrix=None):
+                 input_handles=None, c_matrix=None, d_matrix=None):
         self.C = c_matrix
         self.D = d_matrix
         self.base_lbl = base_lbl
@@ -229,12 +240,10 @@ class StateSpace(object):
         if self.D is None:
             self.D = np.zeros((self.C.shape[0], np.atleast_2d(self.B[0][available_power]).T.shape[1]))
 
-        self.input = input_handle
-        if self.input is None:
+        if input_handles is None:
             self.input = EmptyInput(self.B[0][available_power].shape[1])
-
-        if not callable(self.input):
-            raise TypeError("input must be callable!")
+        else:
+            self.input = sanitize_input(input_handles, SimulationInput)
 
     # TODO export cython code?
     def rhs(self, _t, _q):
@@ -248,17 +257,19 @@ class StateSpace(object):
         Returns:
             (array): :math:`\boldsymbol{\dot{x}}(t)`
         """
-        q_t = self.A[0]
-        for p, a_mat in self.A.items():
-            q_t = q_t + a_mat @ np.power(_q, p)
+        state_part = self.A[0]
+        for power, a_mat in self.A.items():
+            state_part = state_part + a_mat @ np.power(_q, power)
 
-        # TODO make compliant with definition of temporal derived input
-        u = self.input(time=_t, weights=_q, weight_lbl=self.base_lbl)
-        for o, p_mats in self.B.items():
-            for p, b_mat in p_mats.items():
-                # q_t = q_t + (b_mat @ np.power(u, p)).flatten()
-                q_t = q_t + b_mat @ np.power(u, p)
+        input_part = np.zeros_like(state_part)
+        inputs = np.atleast_2d([u(time=_t, weights=_q, weight_lbl=self.base_lbl)
+                                for u in self.input])
+        for der_order, power_dict in self.B.items():
+            for power, b_mat in power_dict.items():
+                for idx, col in enumerate(b_mat.T):
+                    input_part = input_part + col * inputs[idx, der_order]
 
+        q_t = state_part + input_part
         return q_t
 
 
@@ -315,7 +326,7 @@ def simulate_systems(weak_forms, initial_states, temporal_domain, spatial_domain
         FieldVariable and demanded derivatives.
     """
     if derivative_orders is None:
-        derivative_orders = dict([(lbl, (0,0))for lbl in spatial_domains])
+        derivative_orders = dict([(lbl, (0, 0))for lbl in spatial_domains])
 
     weak_forms = sanitize_input(weak_forms, WeakFormulation)
     print("simulate systems: {}".format([f.name for f in weak_forms]))
@@ -451,7 +462,7 @@ class CanonicalForm(object):
         self.matrices = {}
         # self._max_idx = dict(E=0, f=0, G=0)
         self._weights = None
-        self._input_function = None
+        self._input_functions = None
         self._finalized = False
         self.powers = None
         self.max_power = None
@@ -474,15 +485,26 @@ class CanonicalForm(object):
     #                 self._matrices[name][der][p] += pow
 
     @property
-    def input_function(self):
-        return self._input_function
+    def input_functions(self):
+        return self._input_functions
 
-    @input_function.setter
-    def input_function(self, func):
-        if self._input_function is None:
-            self._input_function = func
-        if self._input_function != func:
-            raise ValueError("already defined input is overridden!")
+    def set_input_function(self, func, index=0):
+        if not isinstance(func, SimulationInput):
+            raise TypeError("Inputs must be of type `SimulationInput`.")
+
+        if self._input_functions is None:
+            self._input_functions = np.atleast_1d(func)
+
+        # check whether the dimensions must be extended
+        if index >= self.input_functions.shape[0]:
+            old_len = self._input_functions.shape[0]
+            new_input_functions = np.empty(index + 1, dtype=object)
+            new_input_functions[:old_len] = self._input_functions
+            self._input_functions = new_input_functions
+            self._input_functions[index] = func
+        else:
+            if self._input_functions[index] != func:
+                raise ValueError("already defined input is overridden!")
 
     # @property
     # def weights(self):
@@ -520,7 +542,9 @@ class CanonicalForm(object):
 
         # get entry
         if term["name"] == "f":
-            if ("order" in term) or ("exponent" in term and term["exponent"] is not 0):
+            if ("order" in term) \
+                or ("exponent" in term
+                    and term["exponent"] is not 0):
                 warnings.warn("order and exponent are ignored for f_vector!")
             f_vector = self.matrices.get("f", np.zeros_like(value))
             self.matrices["f"] = value + f_vector
@@ -528,18 +552,27 @@ class CanonicalForm(object):
 
         type_group = self.matrices.get(term["name"], {})
         derivative_group = type_group.get(term["order"], {})
-        target_matrix = derivative_group.get(term["exponent"], np.zeros_like(value))
+        target_matrix = derivative_group.get(term["exponent"],
+                                             np.zeros_like(value))
 
         if target_matrix.shape != value.shape and column is None:
-            raise ValueError("{0}{1}{2} was already initialized with dimensions {3} but value to add has "
-                             "dimension {4}".format(term["name"], term["order"], term["exponent"],
-                                                    target_matrix.shape, value.shape))
+            msg = "{0}{1}{2} was already initialized with dimensions {3} but " \
+                  "value to add has dimension {4}".format(term["name"],
+                                                          term["order"],
+                                                          term["exponent"],
+                                                          target_matrix.shape,
+                                                          value.shape)
+            raise ValueError(msg)
 
         if column is not None:
-            # check whether the dimensions fit or if the matrix has to be extended
+            # check whether the dimensions fit or if the matrix must be extended
             if column >= target_matrix.shape[1]:
-                new_target_matrix = np.zeros((target_matrix.shape[0], column + 1))
-                new_target_matrix[:target_matrix.shape[0], :target_matrix.shape[1]] = target_matrix
+                new_target_matrix = np.zeros((target_matrix.shape[0],
+                                              column + 1))
+                new_target_matrix[
+                    :target_matrix.shape[0],
+                    :target_matrix.shape[1]
+                ] = target_matrix
                 target_matrix = new_target_matrix
 
             target_matrix[:, column:column + 1] += value
@@ -675,7 +708,7 @@ class CanonicalForm(object):
         a_matrices.update({0: f_mat})
 
         ss = StateSpace(a_matrices, b_matrices,
-                        input_handle=self.input_function)
+                        input_handles=self.input_functions)
         return ss
 
     def _build_feedback(self, entry, power, product_mat):
@@ -822,15 +855,14 @@ class CanonicalEquation(object):
         return {label: val.get_terms() for label, val in self.dynamic_forms.items()}
 
     @property
-    def input_function(self):
+    def input_functions(self):
         """
-        The input handle for the equation.
+        The input handles for the equation.
         """
-        return self._static_form.input_function
+        return self._static_form.input_functions
 
-    @input_function.setter
-    def input_function(self, func):
-        self._static_form.input_function = func
+    def set_input_function(self, func, index=0):
+        self._static_form.set_input_function(func, index)
 
 
 def create_state_space(canonical_equations):
@@ -907,9 +939,9 @@ def create_state_space(canonical_equations):
 
         # update input handles
         if state_space_props.input is None:
-            state_space_props.input = eq.input_function
+            state_space_props.input = eq.input_functions
         else:
-            if eq.input_function is not None and state_space_props.input != eq.input_function:
+            if eq.input_functions is not None and state_space_props.input != eq.input_functions:
                 raise ValueError("Only one input object allowed.")
 
     # build new basis by concatenating the dominant bases of every equation
@@ -973,7 +1005,7 @@ def create_state_space(canonical_equations):
             b_matrices.update({order: b_order_mats})
 
     dom_ss = StateSpace(a_matrices, b_matrices, base_lbl=new_name,
-                        input_handle=state_space_props.input)
+                        input_handles=state_space_props.input)
     return dom_ss
 
 
@@ -1006,19 +1038,24 @@ def parse_weak_formulation(weak_form, finalize=False):
     # handle each term
     for term in weak_form.terms:
         # extract Placeholders
-        placeholders = dict(scalars=term.arg.get_arg_by_class(Scalars),
-                            functions=term.arg.get_arg_by_class(TestFunction),
-                            field_variables=term.arg.get_arg_by_class(FieldVariable),
-                            inputs=term.arg.get_arg_by_class(Input))
+        placeholders = dict(
+            scalars=term.arg.get_arg_by_class(Scalars),
+            functions=term.arg.get_arg_by_class(TestFunction),
+            field_variables=term.arg.get_arg_by_class(FieldVariable),
+            inputs=term.arg.get_arg_by_class(Input))
 
         # field variable terms: sort into E_np, E_n-1p, ..., E_0p
         if placeholders["field_variables"]:
+            assert isinstance(term, IntegralTerm)
+
             if len(placeholders["field_variables"]) != 1:
                 raise NotImplementedError
 
             field_var = placeholders["field_variables"][0]
             if not field_var.simulation_compliant:
-                raise ValueError("Shape- and test-function labels of FieldVariable must match for simulation purposes.")
+                msg = "Shape- and test-function labels of FieldVariable must " \
+                      "match for simulation purposes."
+                raise ValueError(msg)
 
             temp_order = field_var.order[0]
             exponent = field_var.data["exponent"]
@@ -1036,17 +1073,19 @@ def parse_weak_formulation(weak_form, finalize=False):
                 if len(placeholders["functions"]) != 1:
                     raise NotImplementedError
                 func = placeholders["functions"][0]
-                test_funcs = get_base(func.data["func_lbl"]).derive(func.order[1])
+                fractions = get_base(func.data["func_lbl"]).derive(func.order[1])
                 result = calculate_scalar_product_matrix(dot_product_l2,
-                                                         test_funcs,
+                                                         fractions,
                                                          shape_funcs)
             else:
                 # extract constant term and compute integral
-                # TODO this is a source of complex data, since integrate
-                # function will return complex dtype.
-                a = Scalars(np.atleast_2d(
-                    [integrate_function(func, func.nonzero)[0]
-                     for func in shape_funcs.fractions]))
+                components = []
+                for func in shape_funcs.fractions:
+                    area = domain_intersection(term.limits, func.nonzero)
+                    res, err = integrate_function(func, area)
+                    components.append(res)
+
+                a = Scalars(np.atleast_2d(components))
 
                 if placeholders["scalars"]:
                     b = placeholders["scalars"][0]
@@ -1061,24 +1100,41 @@ def parse_weak_formulation(weak_form, finalize=False):
 
         # TestFunctions or pre evaluated terms, those can end up in E, f or G
         if placeholders["functions"]:
+            assert isinstance(term, IntegralTerm)
+
             if not 1 <= len(placeholders["functions"]) <= 2:
                 raise NotImplementedError
             func = placeholders["functions"][0]
-            test_funcs = get_base(func.data["func_lbl"]).derive(func.order[1]).fractions
+            fractions = get_base(func.data["func_lbl"]
+                                 ).derive(func.order[1]).fractions
 
             if len(placeholders["functions"]) == 2:
-                # TODO this computation is nonsense. Result must be a vector containing int(tf1*tf2)
-                raise NotImplementedError
-                #
-                # func2 = placeholders["functions"][1]
-                # test_funcs2 = get_base(func2.data["func_lbl"], func2.order[2])
-                # result = calculate_scalar_product_matrix(dot_product_l2, test_funcs, test_funcs2)
-                # cf.add_to(("f", 0), result * term.scale)
-                # continue
+                func2 = placeholders["functions"][1]
+                fractions2 = get_base(func2.data["func_lbl"]
+                                      ).derive(func2.order[1]).fractions
+                res = []
+                for frac, frac2 in zip(fractions, fractions2):
+                    scaled_frac = frac.scale(frac2)
+                    dom = domain_intersection(scaled_frac.domain, term.limits)
+                    _res, err = integrate_function(scaled_frac, dom)
+                    res.append(_res)
+
+                # create column vector
+                res = np.atleast_2d(res).T * term.scale
+                term_info = dict(name="f", exponent=0)
+                ce.add_to(weight_label=None, term=term_info, val=res)
+                continue
+
+            components = []
+            for frac in fractions:
+                area = domain_intersection(term.limits, frac.nonzero)
+                res, err = integrate_function(frac, area)
+                components.append(res)
 
             if placeholders["scalars"]:
                 a = placeholders["scalars"][0]
-                b = Scalars(np.vstack([integrate_function(func, func.nonzero)[0] for func in test_funcs]))
+                b = Scalars(np.vstack(components))
+
                 result = _compute_product_of_scalars([a, b])
 
                 ce.add_to(weight_label=a.target_form,
@@ -1096,14 +1152,18 @@ def parse_weak_formulation(weak_form, finalize=False):
                 input_order = input_var.order[0]
                 term_info = dict(name="G", order=input_order, exponent=input_exp)
 
-                result = np.array([[integrate_function(func, func.nonzero)[0]] for func in test_funcs])
+                # create column vector
+                result = np.atleast_2d(components).T
 
-                ce.add_to(weight_label=None, term=term_info, val=result * term.scale, column=input_index)
-                ce.input_function = input_func
+                ce.add_to(weight_label=None, term=term_info,
+                          val=result * term.scale, column=input_index)
+                ce.set_input_function(input_func, input_index)
                 continue
 
         # pure scalar terms, sort into corresponding matrices
         if placeholders["scalars"]:
+            assert isinstance(term, ScalarTerm)
+
             result = _compute_product_of_scalars(placeholders["scalars"])
             target = get_common_target(placeholders["scalars"])
             target_form = get_common_form(placeholders)
@@ -1114,22 +1174,24 @@ def parse_weak_formulation(weak_form, finalize=False):
                 input_index = input_var.data["index"]
                 input_exp = input_var.data["exponent"]
                 input_order = input_var.order[0]
-                term_info = dict(name="G", order=input_order, exponent=input_exp)
 
-                if input_order > 0:
-                    # here we would need to provide derivative handles in the callable
-                    raise NotImplementedError
+                term_info = dict(name="G",
+                                 order=input_order,
+                                 exponent=input_exp)
 
                 if target["name"] == "E":
-                    # this would mean that the input term should appear in a matrix like E1 or E2
-                    # the result would be a time dependant sate transition matrix
+                    # this would mean that the input term should appear in a
+                    # matrix like E1 or E2, again leading to a time dependant
+                    # state transition matrix
                     raise NotImplementedError
 
-                ce.add_to(weight_label=None, term=term_info, val=result * term.scale, column=input_index)
-                ce.input_function = input_func
+                ce.add_to(weight_label=None, term=term_info,
+                          val=result * term.scale, column=input_index)
+                ce.set_input_function(input_func, input_index)
                 continue
 
-            ce.add_to(weight_label=target_form, term=target, val=result * term.scale)
+            ce.add_to(weight_label=target_form, term=target,
+                      val=result * term.scale)
             continue
 
     # inform object that the parsing process is complete
@@ -1205,13 +1267,8 @@ def simulate_state_space(state_space, initial_state, temp_domain, settings=None)
     Return:
         tuple: Time :py:class:`.Domain` object and weights matrix.
     """
-    if not isinstance(state_space, StateSpace):
-        raise TypeError
-
-    input_handle = state_space.input
-
-    if not isinstance(input_handle, SimulationInput):
-        raise TypeError("only simulation.SimulationInput supported.")
+    # if not isinstance(state_space, StateSpace):
+    #     raise TypeError
 
     q = [initial_state]
     t = [temp_domain[0]]
@@ -1232,7 +1289,7 @@ def simulate_state_space(state_space, initial_state, temp_domain, settings=None)
 
     r.set_initial_value(q[0], t[0])
 
-    for t_step in temp_domain[1:]:
+    for t_step in tqdm(temp_domain[1:]):
         qn = r.integrate(t_step)
         if not r.successful():
             warnings.warn("*** Error: Simulation aborted at t={} ***".format(r.t))

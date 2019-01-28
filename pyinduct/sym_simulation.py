@@ -12,7 +12,7 @@ from sympy.utilities.autowrap import ufuncify
 import numpy as np
 from scipy.integrate import solve_ivp, ode
 from tqdm import tqdm
-from jitcode import jitcode, t, y, UnsuccessfulIntegration
+# from jitcode import jitcode, t, y, UnsuccessfulIntegration
 
 from matplotlib import pyplot as plt
 
@@ -1024,8 +1024,11 @@ def _find_derivatives(weak_forms, sym):
 
     derivatives = set()
     for eq in weak_forms:
-        ders = {der for der in eq.atoms(sp.Derivative) if der.args[1] in sym}
-        derivatives.update(ders)
+        for der in eq.atoms(sp.Derivative):
+            for partials in der.args[1:]:
+                if partials[0] in sym:
+                    derivatives.add(der)
+                    break
 
     return derivatives
 

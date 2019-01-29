@@ -1033,27 +1033,48 @@ def _find_derivatives(weak_forms, sym):
     return derivatives
 
 
-def _convert_higher_derivative(weak_forms, derivative):
+def _convert_higher_derivative(weak_forms, derivative, sym=None):
 
     target_set = set()
     subs_list = []
     new_forms = weak_forms
 
+    if sym is None:
+        if len(derivative.args) > 2:
+            raise ValueError("Mixed derivative provided. "
+                             "Conversion direction has to be given.")
+        else:
+            sym = derivative.args[1][0]
+
     expr = derivative.args[0]
-    order = len(derivative.args) - 1
+    rem_args = [expr]
+    order = None
+    for arg in derivative.args[1:]:
+        if arg[0] == sym:
+            order = arg[1]
+        else:
+            rem_args.append(arg)
+
+    if order is None:
+        raise ValueError("Provided symbol '{}' is not contained in given "
+                         "derivative.")
+    if order.is_Integer:
+        order = int(order)
 
     if _weight_letter in str(expr):
+        assert sym == time
         if order > 1:
             # c1_dd = f()
             # c1_d = c2
             # -> c1_dd = c2_d
             # -> c2_d = f()
             new_var = get_weight()
-            red_deriv = derivative.func(*derivative.args[:-1])
+            new_args = rem_args + [(sym, order - 1)]
+            red_deriv = derivative.func(*new_args)
             new_eq = new_var - red_deriv
             new_der = new_var.diff(time)
             new_forms = weak_forms.xreplace({derivative: new_der})
-            new_forms.append(new_eq)
+            new_forms = new_forms.row_insert(0, sp.Matrix([new_eq]))
 
             # replace remaining derivative
             new_forms, subs_pairs, new_targets = _convert_higher_derivative(
@@ -1070,8 +1091,9 @@ def _convert_higher_derivative(weak_forms, derivative):
             target_set.add(derivative)
 
     elif _input_letter in str(expr):
-        warnings.warn("Temporal input derivative detected, this may cause"
-                      "problems later on.")
+        if sym == time:
+            warnings.warn("Temporal input derivative detected, this may cause "
+                          "problems later on.")
 
     elif _function_letter in str(expr) or _test_function_letter in str(expr):
         if 1:

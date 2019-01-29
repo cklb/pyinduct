@@ -48,8 +48,8 @@ alpha = sp.symbols("alpha", real=True)
 param_list = [
     (alpha, .1),
     # parameters for approximation of nonlinearities
-    # ("enable_approx", True),
-    ("enable_approx", False),
+    ("enable_approx", True),
+    # ("enable_approx", False),
     # ("approx_mode", "series"),
     ("approx_mode", "pointwise"),
     ("approx_pos", .5),

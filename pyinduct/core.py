@@ -1708,10 +1708,11 @@ class Bunch(dict):
     __delattr__ = dict.__delitem__
 
     def __repr__(self):
+        return super().__repr__()
         if self.keys():
             m = max(map(len, list(self.keys()))) + 1
-            return '\n'.join([k.rjust(m) + ': ' + repr(v)
-                              for k, v in sorted(self.items())])
+            content = '\n'.join([k.rjust(m) + ': ' + repr(v)
+                                 for k, v in sorted(self.items())])
         else:
             return self.__class__.__name__ + "()"
 

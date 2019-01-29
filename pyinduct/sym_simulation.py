@@ -1357,16 +1357,9 @@ def simulate_state_space(ss_sys, y0, temp_dom):
         else:
             rhs = ss_sys.rhs
 
-        input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
-        state_mapping = {s: sp.Dummy() for s in ss_sys.state}
-        subs_map = {**input_mapping, **state_mapping}
+        dummy_inputs, dummy_rhs, dummy_state = dummify_system(ss_sys)
 
-        dummy_rhs = rhs.xreplace(subs_map)
-
-        args = [time,
-                [input_mapping[inp] for inp in ss_sys.inputs],
-                [state_mapping[st] for st in ss_sys.state]
-                ]
+        args = [time, dummy_inputs, dummy_state]
         rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
 
         def _rhs(_t, _q):
@@ -1391,6 +1384,19 @@ def simulate_state_space(ss_sys, y0, temp_dom):
         print(">>> running time step simulation")
         t_dom, res = old_ss_sim(_rhs, y0, temp_dom)
         return t_dom, res
+
+
+def dummify_system(ss_sys):
+    """ Replace all applied functions with dummy symbols """
+    input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
+    state_mapping = {s: sp.Dummy() for s in ss_sys.state}
+    subs_map = {**input_mapping, **state_mapping}
+
+    dummy_rhs = ss_sys.rhs.xreplace(subs_map)
+    dummy_inputs = [input_mapping[inp] for inp in ss_sys.inputs]
+    dummy_state = [state_mapping[st] for st in ss_sys.state]
+
+    return dummy_inputs, dummy_rhs, dummy_state
 
 
 def get_state(approx_map, state, extra_args):

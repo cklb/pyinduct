@@ -1,4 +1,5 @@
 import pickle
+import dill
 import numpy as np
 import sympy as sp
 
@@ -130,7 +131,22 @@ approx_map = {
     gamma: gamma_approx
 }
 
-results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
+# build complete form
+rep_eqs, approximations = ss.substitute_approximations(equations, approx_map)
+
+# convert to state space system
+ss_sys = ss.create_first_order_system(rep_eqs, input_map)
+
+if 1:
+    export_sys = ss.dummify_system(ss_sys)
+    with open("tpsp_N={}.pkl".format(N), "w") as f:
+        f.write(sp.srepr(export_sys))
+    quit()
+
+# process initial conditions
+y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
+
+# results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
 
 if 0:
     data = str(inputs), str(state), str(sys)

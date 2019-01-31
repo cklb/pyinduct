@@ -9,7 +9,7 @@ import pyinduct.sym_simulation as ss
 import pyqtgraph as pg
 
 # approximation order
-N = 20
+N = 5
 
 # spatial domains
 spat_dom = pi.Domain((0, 1), num=N)
@@ -30,7 +30,9 @@ u2 = ss.get_input()
 # define symbols of spatially distributed and lumped system variables
 x1 = ss.get_field_variable(z, t)
 x2 = ss.get_field_variable(z, t)
-gamma = sp.symbols("gamma", cls=sp.Function)(t)
+gamma = ss.get_field_variable(t)
+# gamma = sp.symbols("gamma", cls=sp.Function)(t)
+# gamma = gamma.subs(z, 1)
 
 # define symbols for test functions
 phi1_k = ss.get_test_function(z)
@@ -75,10 +77,13 @@ if 1:
 else:
     fem_base = ss.create_lag1ast_base(z, zb_dom, N)
 pi.register_base("fem", fem_base)
+gamma_base = pi.Base(pi.Function.from_constant(1, domain=zb_dom))
+pi.register_base("gamma", gamma_base)
 
 # create approximations, homogenizing where needed
 x1_approx = ss.create_approximation(z, "fem", boundaries_x1)
 x2_approx = ss.create_approximation(z, "fem", boundaries_x2)
+# gamma_approx = ss.create_approximation(z, "gamma")
 gamma_approx = ss.get_weight()
 
 # define the initial conditions for each approximation
@@ -131,22 +136,23 @@ approx_map = {
     gamma: gamma_approx
 }
 
-# build complete form
-rep_eqs, approximations = ss.substitute_approximations(equations, approx_map)
+if 0:
+    # build complete form
+    rep_eqs, approximations = ss.substitute_approximations(equations, approx_map)
 
-# convert to state space system
-ss_sys = ss.create_first_order_system(rep_eqs, input_map)
+    # convert to state space system
+    ss_sys = ss.create_first_order_system(rep_eqs, input_map)
 
-if 1:
-    export_sys = ss.dummify_system(ss_sys)
-    with open("tpsp_N={}.pkl".format(N), "w") as f:
-        f.write(sp.srepr(export_sys))
-    quit()
+    if 1:
+        export_sys = ss.dummify_system(ss_sys)
+        with open("tpsp_N={}.pkl".format(N), "w") as f:
+            f.write(sp.srepr(export_sys))
+        quit()
 
-# process initial conditions
-y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
+    # process initial conditions
+    y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
 
-# results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
+results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
 
 if 0:
     data = str(inputs), str(state), str(sys)
@@ -166,11 +172,17 @@ else:
 
 # gamma_sim = res_weights.y[-1]
 plots = []
-for res in results:
-    p = pg.plot(res.input_data[1].points, res.output_data[0, :])
-    plots.append(p)
 
-win = pi.PgAnimatedPlot(results)
+# initial conditions
+# for res in results:
+#     p = pg.plot(res.input_data[1].points, res.output_data[0, :])
+#     plots.append(p)
+
+res_gamma = results[-1]
+p = pg.plot(res_gamma.input_data[0].points, res_gamma.output_data)
+
+
+win = pi.PgAnimatedPlot(results[:-1])
 win1 = pi.PgSurfacePlot(results[0])
 win2 = pi.PgSurfacePlot(results[1])
 pi.show()

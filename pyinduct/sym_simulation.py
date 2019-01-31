@@ -497,7 +497,7 @@ def create_lag1ast_base(sym, bounds, num):
     return funcs
 
 
-def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
+def create_approximation(syms, base_lbl, boundary_conditions=None, weights=None):
     """
     Create a lumped approximation of a distributed variable
 
@@ -510,10 +510,10 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
         syms((list of) Symbol(s)): Symbol(s) to use for approximation.
             (Dimension to discretise)
         base_lbl(str): Label of the base to use
-        boundary_conditions(list): List of boundary conditions that have to be
-            met by the approximation.
 
     Keyword Args:
+        boundary_conditions(list): List of boundary conditions that have to be
+            met by the approximation.
         weights(list): If provided, weight symbols to use for the approximation.
             By default (None), a new set of weights will be created.
 
@@ -523,6 +523,8 @@ def create_approximation(syms, base_lbl, boundary_conditions, weights=None):
     """
     if isinstance(syms, sp.Basic):
         syms = [syms]
+    if boundary_conditions is None:
+        boundary_conditions = []
 
     if len(syms) > 1:
         raise NotImplementedError("Higher dimensional cases are still missing")
@@ -911,7 +913,7 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     # extract original state
     state_traj, input_traj = calc_original_state(sim_state, ss_sys, t_dom)
 
-    results = process_results(approximations, input_traj, spat_dom, ss_sys,
+    results = process_results(ics.keys(), input_traj, spat_dom, ss_sys,
                               state_traj, t_dom)
 
     return results
@@ -1357,7 +1359,7 @@ def simulate_state_space(ss_sys, y0, temp_dom):
         else:
             rhs = ss_sys.rhs
 
-        dummy_inputs, dummy_rhs, dummy_state = dummify_system(ss_sys)
+        dummy_rhs, dummy_state, dummy_inputs= dummify_system(ss_sys)
 
         args = [time, dummy_inputs, dummy_state]
         rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
@@ -1396,7 +1398,7 @@ def dummify_system(ss_sys):
     dummy_inputs = [input_mapping[inp] for inp in ss_sys.inputs]
     dummy_state = [state_mapping[st] for st in ss_sys.state]
 
-    return dummy_inputs, dummy_rhs, dummy_state
+    return dummy_rhs, dummy_state, dummy_inputs
 
 
 def get_state(approx_map, state, extra_args):
@@ -1434,20 +1436,28 @@ def _sort_weights(weights, inp_values, ss_sys, approximations):
     state_elements = list(ss_sys.state)
     inputs = list(ss_sys.inputs)
     for approx in approximations:
-        a_lbls = approx.weights
-        a_weights = []
-        for lbl in a_lbls:
-            idx = state_elements.index(lbl)
-            a_weights.append(weights[:, idx])
+        if _weight_letter in str(approx):
+            # lumped variable
+            idx = state_elements.index(approx)
+            weight_dict[approx] = weights[:, idx]
+            extra_dict[approx] = None
+        elif isinstance(approx, LumpedApproximation):
+            a_lbls = approx.weights
+            a_weights = []
+            for lbl in a_lbls:
+                idx = state_elements.index(lbl)
+                a_weights.append(weights[:, idx])
 
-        i_lbls = approx.extra_args
-        i_values = []
-        for lbl in i_lbls:
-            idx = inputs.index(lbl)
-            i_values.append(inp_values[:, idx])
+            i_lbls = approx.extra_args
+            i_values = []
+            for lbl in i_lbls:
+                idx = inputs.index(lbl)
+                i_values.append(inp_values[:, idx])
 
-        weight_dict[approx] = np.array(a_weights).T
-        extra_dict[approx] = np.array(i_values).T
+            weight_dict[approx] = np.array(a_weights).T
+            extra_dict[approx] = np.array(i_values).T
+        else:
+            raise NotImplementedError
 
     return weight_dict, extra_dict
 
@@ -1469,24 +1479,30 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
     for approx in approximations:
         weight_mat = weight_dict[approx]
         extra_mat = extra_dict[approx]
-        args = np.hstack((np.array(r_grids[:-1]).T,
-                          weight_mat[r_grids[-1]]
-                          ))
-        if len(extra_mat) > 0:
-            args = np.hstack((args, extra_mat[r_grids[-1]]))
+        if _weight_letter in str(approx):
+            out_data = weight_mat
+            data = EvalData(input_data=[temp_dom], output_data=out_data,
+                            name=str(approx))
+        elif isinstance(approx, LumpedApproximation):
+            args = np.hstack((np.array(r_grids[:-1]).T,
+                              weight_mat[r_grids[-1]]
+                              ))
+            if len(extra_mat) > 0:
+                args = np.hstack((args, extra_mat[r_grids[-1]]))
 
-        if 0:
-            # lambdified functions do not like vectorial input
-            res = approx(*args)
-        else:
-            res = np.zeros(len(r_grids[0]))
-            for idx, row in enumerate(args):
-                res[idx] = approx(*row)
+            if 0:
+                # lambdified functions do not like vectorial input
+                res = approx(*args)
+            else:
+                res = np.zeros(len(r_grids[0]))
+                for idx, row in enumerate(args):
+                    res[idx] = approx(*row)
 
-        # per convention the time axis comes first
-        out_data = np.moveaxis(res.reshape(all_dims), -1, 0)
-        data = EvalData(input_data=[temp_dom] + spat_doms,
-                        output_data=out_data)
+            # per convention the time axis comes first
+            out_data = np.moveaxis(res.reshape(all_dims), -1, 0)
+            data = EvalData(input_data=[temp_dom] + spat_doms,
+                            output_data=out_data,
+                            name=str(approx))
         results.append(data)
 
     return results

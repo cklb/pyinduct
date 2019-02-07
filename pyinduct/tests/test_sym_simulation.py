@@ -4,6 +4,34 @@ import unittest
 import sympy as sp
 
 
+class TestSymStateSpace(unittest.TestCase):
+
+    def setUp(self):
+        self.t = sp.Symbol("t")
+        self.x = sp.Matrix([sp.Function("x_{}".format(n))(self.t)
+                            for n in range(10)])
+        self.u = sp.Matrix([sp.Function("u_{}".format(n))(self.t)
+                            for n in range(5)])
+
+    def test_init(self):
+        sys = ss.SymStateSpace(None, None, None, None, None, None)
+
+    def test_repr(self):
+        # test if export via srepr/sympify works
+        self.assertTrue(self.x == sp.sympify(sp.srepr(self.x)))
+
+    def test_dump(self):
+        sys_1 = ss.SymStateSpace(None, None, None, self.x, self.u, None)
+        f = "test.sys"
+        sys_1.dump(f)
+        sys_2 = ss.SymStateSpace.from_file(f)
+
+        for x1, x2 in zip(sys_1.orig_state, sys_2.orig_state):
+            self.assertFalse(id(x1) == id(x2))
+            self.assertTrue(hash(x1) == hash(x2))
+            self.assertTrue(x1 == x2)
+
+
 class DerivativeHandling(unittest.TestCase):
 
     def setUp(self):

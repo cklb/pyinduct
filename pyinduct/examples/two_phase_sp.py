@@ -143,16 +143,15 @@ if 0:
     # convert to state space system
     ss_sys = ss.create_first_order_system(rep_eqs, input_map)
 
-    if 1:
-        export_sys = ss.dummify_system(ss_sys)
-        with open("tpsp_N={}.pkl".format(N), "w") as f:
-            f.write(sp.srepr(export_sys))
-        quit()
+    f_name = "tpsp_N={}.dl".format(N)
+    ss_sys.dump(f_name)
+    ss_sys = ss.SymStateSpace.from_file(f_name)
 
     # process initial conditions
-    y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
+    y0 = ss.calc_initial_sate(ss_sys, ics, temp_dom[0])
 
-results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
+else:
+    results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
 
 if 0:
     data = str(inputs), str(state), str(sys)

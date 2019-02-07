@@ -13,6 +13,7 @@ import numpy as np
 from scipy.integrate import solve_ivp, ode
 from tqdm import tqdm
 # from jitcode import jitcode, t, y, UnsuccessfulIntegration
+import dill
 
 from matplotlib import pyplot as plt
 
@@ -800,7 +801,7 @@ def _substitute_kth_occurrence(equation, symbol, expressions):
     return new_eqs, mappings
 
 
-def create_first_order_system(weak_forms, input_map):
+def create_first_order_system(weak_forms):
 
     new_forms = sp.Matrix(weak_forms)
 
@@ -827,7 +828,7 @@ def create_first_order_system(weak_forms, input_map):
 
     print(">>> identifying inputs")
     inputs = _find_inputs(new_forms)
-    sorted_inputs = sorted(inputs, key=lambda x: str(x))
+    sorted_inputs = sp.Matrix(sorted(inputs, key=lambda x: str(x)))
     # sp.pprint(sorted_inputs)
 
     print(">>> identifying state components")
@@ -837,6 +838,61 @@ def create_first_order_system(weak_forms, input_map):
     # sp.pprint(sorted_state)
 
     print(">>> solving for targets:")
+    ss_form = _solve_for_derivatives(new_forms, sorted_state)
+
+    print(">>> checking for input derivatives:")
+    ss_form, transformed_state, state_trafos = _handle_input_derivatives(
+        ss_form, sorted_state, sorted_inputs, weak_forms)
+
+    print(">>> substituting functions with dummy variables:")
+    dummy_rhs, dummy_state, dummy_inputs = _dummify_system(ss_form,
+                                                           transformed_state,
+                                                           sorted_inputs)
+
+    ss_sys = SymStateSpace(dummy_rhs, dummy_state, dummy_inputs,
+                           sorted_state, sorted_inputs,
+                           state_trafos)
+
+    # ss_sys = Bunch(rhs=ss_form,
+    #                state=transformed_state,
+    #                inputs=sorted_inputs,
+    #                input_map=input_map,
+    #                orig_state=sorted_state,
+    #                transformations=state_trafos)
+
+    return ss_sys
+
+
+def _handle_input_derivatives(ss_form, sorted_state, inputs, weak_forms):
+    input_derivatives = [d for d in _find_derivatives(weak_forms, time)
+                         if d.args[0] in inputs]
+    if input_derivatives:
+        print("\t-derivatives found")
+        ss_form, transformed_state, state_trafos = _eliminate_input_derivatives(
+            input_derivatives,
+            ss_form,
+            sorted_state,
+            inputs)
+    else:
+        print("\t-no derivatives found")
+        transformed_state = sorted_state
+        state_trafos = tuple()
+
+    return ss_form, transformed_state, state_trafos
+
+
+def _solve_for_derivatives(new_forms, sorted_state):
+    """
+    Solve for an explicit first order differential equation in the state
+    variables.
+
+    Args:
+        new_forms: Implicit differential equations for state components.
+        sorted_state: State vector.
+
+    Returns:
+        sp.Matrix: Right-hand side of the state space formulation
+    """
     if 0:
         sol_dict = sp.solve(new_forms, targets)
         # sp.pprint(ss_form)
@@ -858,27 +914,7 @@ def create_first_order_system(weak_forms, input_map):
 
         print("\t-solving equation system")
         ss_form = A.LUsolve(b)
-
-    input_derivatives = [d for d in _find_derivatives(weak_forms, time)
-                         if d.args[0] in inputs]
-    if input_derivatives:
-        print(">>> eliminating input derivatives")
-        ss_form, new_state, state_trafos = _eliminate_input_derivatives(
-            input_derivatives,
-            ss_form,
-            sorted_state,
-            inputs)
-    else:
-        state_trafos = tuple()
-
-    ss_sys = Bunch(rhs=ss_form,
-                   state=sorted_state,
-                   inputs=sorted_inputs,
-                   input_map=input_map,
-                   orig_state=sorted_state,
-                   transformations=state_trafos)
-
-    return ss_sys
+    return ss_form
 
 
 def _run_evaluations(weak_forms):
@@ -902,16 +938,23 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     rep_eqs, approximations = substitute_approximations(weak_forms, approx_map)
 
     # convert to state space system
-    ss_sys = create_first_order_system(rep_eqs, input_map)
+    ss_sys = create_first_order_system(rep_eqs)
+
+    if 1:
+        # HACK test export
+        f_name = "test_sys"
+        ss_sys.dump(f_name)
+        ss_sys2 = SymStateSpace.from_file(f_name)
+        assert id(ss_sys.orig_state[0]) != id(ss_sys2.orig_state[0])
 
     # process initial conditions
     y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
 
     # simulate
-    t_dom, sim_state = simulate_state_space(ss_sys, y0, temp_dom)
+    t_dom, sim_state = simulate_state_space(ss_sys, y0, input_map, temp_dom)
 
     # extract original state
-    state_traj, input_traj = calc_original_state(sim_state, ss_sys, t_dom)
+    state_traj, input_traj = calc_original_state(sim_state, ss_sys, input_map, t_dom)
 
     results = process_results(ics.keys(), input_traj, spat_dom, ss_sys,
                               state_traj, t_dom)
@@ -931,36 +974,36 @@ def process_results(approximations, input_traj, spat_dom, ss_sys, state_traj,
 
 def calc_initial_sate(ss_sys, ics, t0):
     print(">>> projecting initial states")
-    u0 = [ics.pop(u) for u in ss_sys.inputs if u in ics]
+    u0 = [ics.pop(u) for u in ss_sys.orig_inputs if u in ics]
     y0_orig = get_state(ics, ss_sys.orig_state, u0)
-    if ss_sys.transformations:
-        y0 = np.squeeze(ss_sys.transformations[0](t0, u0, y0_orig))
+    if ss_sys.trafos:
+        y0 = np.squeeze(ss_sys.trafos[0](t0, u0, y0_orig))
         return y0
     else:
         return y0_orig
 
 
-def calc_original_state(sim_results, ss_sys, temp_dom):
+def calc_original_state(sim_results, ss_sys, input_map, temp_dom):
     # check whether state has been altered
-    if ss_sys.transformations is None:
+    if ss_sys.trafos is None:
         return sim_results
 
     # recover input trajectories
-    input_traj = np.zeros((len(temp_dom), len(ss_sys.inputs)))
-    for idx, inp in enumerate(ss_sys.inputs):
-        vals = ss_sys.input_map[inp].get_results(temp_dom)
+    input_traj = np.zeros((len(temp_dom), len(ss_sys.orig_inputs)))
+    for idx, inp in enumerate(ss_sys.orig_inputs):
+        vals = input_map[inp].get_results(temp_dom)
         input_traj[:, idx] = vals
 
     # recover transformed state trajectory
     state_traj = sim_results
 
-    if ss_sys.transformations:
+    if ss_sys.trafos:
         # for now, use a loop
         orig_traj = np.zeros((len(temp_dom), len(ss_sys.orig_state)))
         for idx, t in enumerate(temp_dom):
-            val = np.squeeze(ss_sys.transformations[1](t,
-                                                       input_traj[idx],
-                                                       state_traj[idx]))
+            val = np.squeeze(ss_sys.trafos[1](t,
+                                              input_traj[idx],
+                                              state_traj[idx]))
             orig_traj[idx] = val
     else:
         orig_traj = state_traj
@@ -1255,6 +1298,7 @@ def _eliminate_input_derivatives(input_derivatives, weak_forms, orig_state, inpu
     Returns:
 
     """
+    print("\t-eliminating input derivatives")
     new_state = sp.Matrix(get_weights(len(orig_state)))
     old_expr = new_state
     new_expr = orig_state
@@ -1310,7 +1354,7 @@ def _analyse_term_structure(weak_forms, term):
         raise NotImplementedError
 
 
-def simulate_state_space(ss_sys, y0, temp_dom):
+def simulate_state_space(ss_sys, y0, input_map, temp_dom):
     """
     Simulate an ODE system given its right-hand side
 
@@ -1354,31 +1398,31 @@ def simulate_state_space(ss_sys, y0, temp_dom):
     else:
         print(">>> building expressions")
         if 0:
+            # TODO check if this provides a speedup for explicit linear systems
             A, b = sp.linear_eq_to_matrix(ss_sys.rhs, *ss_sys.state)
             rhs = A @ ss_sys.state + b
         else:
             rhs = ss_sys.rhs
 
-        dummy_rhs, dummy_state, dummy_inputs= dummify_system(ss_sys)
-
-        args = [time, dummy_inputs, dummy_state]
-        rhs_cb = sp.lambdify(args, expr=dummy_rhs, modules="numpy")
+        args = [time, ss_sys.state, ss_sys.inputs]
+        rhs_cb = sp.lambdify(args, expr=rhs, modules="numpy")
 
         def _rhs(_t, _q):
             # print(_t)
-            _u = [ss_sys.input_map[inp](time=_t, weights=_q)
-                  for inp in ss_sys.inputs]
-            y_dt = np.ravel(rhs_cb(_t, _u, _q))
+            _u = [input_map[inp](time=_t, weights=_q)
+                  for inp in ss_sys.orig_inputs]
+            y_dt = np.ravel(rhs_cb(_t, _q, _u))
             return y_dt
 
         if 0:
-            rhs_jac = dummy_rhs.jacobian(args[-1])
+            # TODO check if jacobian improves performance
+            rhs_jac = ss_sys.rhs.jacobian(args[-1])
             jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
 
             def _jac(t, y):
-                u = [ss_sys.input_map[inp](time=t, weights=y)
-                     for inp in ss_sys.inputs]
-                jac = jac_cb(t, u, y)
+                u = [input_map[inp](time=t, weights=y)
+                     for inp in ss_sys.orig_inputs]
+                jac = jac_cb(t, y, u)
                 return jac
 
             return _rhs, _jac
@@ -1388,15 +1432,30 @@ def simulate_state_space(ss_sys, y0, temp_dom):
         return t_dom, res
 
 
-def dummify_system(ss_sys):
-    """ Replace all applied functions with dummy symbols """
-    input_mapping = {inp: sp.Dummy() for inp in ss_sys.inputs}
-    state_mapping = {s: sp.Dummy() for s in ss_sys.state}
+def _dummify_system(rhs, state, inputs):
+    """
+    Replace all applied functions with dummy symbols
+
+    When doing so, the state and input ordering is kept, therefore the relation
+    x_dummy[i] == x_orig[i] remains true.
+
+    Args:
+        rhs(sp.Matrix): Right-hand side of the state space equation.
+        state(sp.Matrix): State vector of the state space equation.
+        inputs(sp.Matrix): Input vector of the state space equation.
+
+    Returns:
+        tuple: Right.hand side, state vector, input vector expressed via dummy
+        variables.
+
+    """
+    input_mapping = {inp: sp.Dummy() for inp in inputs}
+    state_mapping = {s: sp.Dummy() for s in state}
     subs_map = {**input_mapping, **state_mapping}
 
-    dummy_rhs = ss_sys.rhs.xreplace(subs_map)
-    dummy_inputs = [input_mapping[inp] for inp in ss_sys.inputs]
-    dummy_state = [state_mapping[st] for st in ss_sys.state]
+    dummy_rhs = rhs.xreplace(subs_map)
+    dummy_inputs = [input_mapping[inp] for inp in inputs]
+    dummy_state = [state_mapping[st] for st in state]
 
     return dummy_rhs, dummy_state, dummy_inputs
 
@@ -1410,6 +1469,7 @@ def get_state(approx_map, state, extra_args):
             either symbolic expressions or lambda functions in the
             spatial dimensions.
         state(iterable): Iterable holding the elements of the state vector.
+        extra_args(list): Extra arguments required to evaluate the approximation
 
     Returns:
         Numpy array with shape (N,) where `N = len(state)` .
@@ -1419,13 +1479,17 @@ def get_state(approx_map, state, extra_args):
     for key, val in approx_map.items():
         if isinstance(key, LumpedApproximation):
             _weight_set = key.approximate_function(val, *extra_args)
-            new_d = {(lbl, w) for lbl, w in zip(key.weights, _weight_set)}
+            new_d = dict(zip(key.weights, _weight_set))
         elif _weight_letter in str(key):
             new_d = {key: val}
         else:
             raise NotImplementedError
         init_weights.update(new_d)
-    y0 = np.array([init_weights[lbl] for lbl in state])
+    try:
+        y0 = np.array([init_weights[lbl] for lbl in state])
+    except KeyError as e:
+        raise ValueError("No information provided for the calculation of "
+                         "element '{}’ of the state vector.".format(e))
     return y0
 
 
@@ -1433,7 +1497,7 @@ def _sort_weights(weights, inp_values, ss_sys, approximations):
     """ Coordinate a given weight set with approximations """
     weight_dict = dict()
     extra_dict = dict()
-    state_elements = list(ss_sys.state)
+    state_elements = list(ss_sys.orig_state)
     inputs = list(ss_sys.inputs)
     for approx in approximations:
         if _weight_letter in str(approx):
@@ -1506,3 +1570,50 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
         results.append(data)
 
     return results
+
+
+class SymStateSpace:
+    """
+    Class that represents a state space formulation by using symbolic
+    expressions.
+    """
+
+    def __init__(self, rhs, state, inputs, orig_state, orig_inputs, trafos):
+        # things that can be pickled
+        self.rhs = rhs
+        self.state = state
+        self.inputs = inputs
+
+        # things that won't work
+        self.orig_state = orig_state
+        self.orig_inputs = orig_inputs
+        self.trafos = trafos
+
+    def dump(self, file):
+        """
+        Dump this object
+
+        Since pickle won't work for every attribute storage is done in two
+        steps, first nasyt expressions are converted to strings, second
+        all are pickled.
+        """
+        data = (self.rhs, self.state, self.inputs,
+                sp.srepr(self.orig_state), sp.srepr(self.orig_inputs),
+                self.trafos)
+
+        with open(file, "wb") as f:
+            dill.dump(data, f)
+
+    @staticmethod
+    def from_file(file):
+        """
+        Rebuild a state space object from an exported file
+        """
+        with open(file, "rb") as f:
+            data = dill.load(f)
+
+        rhs, state, inputs, o_state_repr, o_inputs_repr, trafos = data
+        orig_state = sp.sympify(o_state_repr)
+        orig_inputs = sp.sympify(o_inputs_repr)
+        obj = SymStateSpace(rhs, state, inputs, orig_state, orig_inputs, trafos)
+        return obj

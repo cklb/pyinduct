@@ -7,29 +7,50 @@ import sympy as sp
 class TestSymStateSpace(unittest.TestCase):
 
     def setUp(self):
-        self.t = sp.Symbol("t")
-        self.x = sp.Matrix([sp.Function("x_{}".format(n))(self.t)
-                            for n in range(10)])
-        self.u = sp.Matrix([sp.Function("u_{}".format(n))(self.t)
-                            for n in range(5)])
+        self.t = ss.time
+        self.x = sp.Matrix(ss.get_weights(10))
+        self.u = sp.Matrix([ss.get_input(self.t) for n in range(5)])
+        self.rhs = (sp.Matrix([sp.cos(x) for x in self.x])
+                    + sp.ones(len(self.x), len(self.u)) @ self.u
+        )
 
     def test_init(self):
         sys = ss.SymStateSpace(None, None, None, None, None, None)
 
-    def test_repr(self):
-        # test if export via srepr/sympify works
-        self.assertTrue(self.x == sp.sympify(sp.srepr(self.x)))
+    def test_sympy_fuckup(self):
+        t = sp.Symbol("t")
+        f = sp.Function("f", real=True)(t)
+
+        f_str = sp.srepr(f)
+        g = sp.sympify(f_str)
+
+        assert hash(f) == hash(g)
+        assert f == g
 
     def test_dump(self):
-        sys_1 = ss.SymStateSpace(None, None, None, self.x, self.u, None)
+        dummies = ss._dummify_system(self.rhs, self.x, self.u)
+        sys_1 = ss.SymStateSpace(*dummies, self.x, self.u, tuple())
         f = "test.sys"
         sys_1.dump(f)
         sys_2 = ss.SymStateSpace.from_file(f)
+        self._check_compatibility(sys_1, sys_2)
 
-        for x1, x2 in zip(sys_1.orig_state, sys_2.orig_state):
-            self.assertFalse(id(x1) == id(x2))
+    def _check_compatibility(self, sys1, sys2):
+        self.assertTrue(id(sys1) != id(sys2))
+        for x1, x2 in zip(sys1.orig_state, sys2.orig_state):
+            # self.assertTrue(id(x1) != id(x2))
             self.assertTrue(hash(x1) == hash(x2))
             self.assertTrue(x1 == x2)
+
+    def test_from_file(self):
+        f = "test.sys"
+        # f = "../examples/test_sys"
+        sys1 = ss.SymStateSpace.from_file(f)
+        sys2 = ss.SymStateSpace.from_file(f)
+        self._check_compatibility(sys1, sys2)
+        # sys1 = ss.SymStateSpace.from_file(f)
+        # sys2 = ss.SymStateSpace.from_file(f)
+        # self._check_compatibility(sys1, sys2)
 
 
 class DerivativeHandling(unittest.TestCase):

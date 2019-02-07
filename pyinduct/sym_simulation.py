@@ -79,7 +79,8 @@ _weight_letter = "_c"
 def get_weight():
     global _weight_cnt
     w = sp.Function("{}_{}".format(_weight_letter, _weight_cnt),
-                    real=True)(time)
+                    # real=True
+                    )(time)
     _weight_cnt += 1
     return w
 
@@ -98,7 +99,8 @@ _function_letter = "_f"
 def get_function(sym):
     global _function_cnt
     f = sp.Function("{}_{}".format(_function_letter, _function_cnt),
-                    real=True)(sym)
+                    # real=True
+                    )(sym)
     _function_cnt += 1
     return f
 
@@ -110,7 +112,8 @@ _field_var_letter = "_x"
 def get_field_variable(*symbols):
     global _field_var_cnt
     x = sp.Function("{}_{}".format(_field_var_letter, _field_var_cnt),
-                    real=True)(*symbols)
+                    # real=True
+                    )(*symbols)
     _field_var_cnt += 1
     return x
 
@@ -122,7 +125,8 @@ _test_function_letter = "_g"
 def get_test_function(*symbols):
     global _test_function_cnt
     g = sp.Function("{}_{}".format(_test_function_letter, _test_function_cnt),
-                    real=True)(*symbols)
+                    # real=True
+                    )(*symbols)
     _test_function_cnt += 1
     return g
 
@@ -136,7 +140,8 @@ def get_input(*symbols):
         symbols = [time]
     global _input_cnt
     u = sp.Function("{}_{}".format(_input_letter, _input_cnt),
-                    real=True)(*symbols)
+                    # real=True
+                    )(*symbols)
     _input_cnt += 1
     return u
 
@@ -148,7 +153,8 @@ _lambda_letter = "_l"
 def get_lambda(*args):
     global _lambda_cnt
     l = sp.Function("{}_{}".format(_lambda_letter, _lambda_cnt),
-                    real=True)(*args)
+                    # real=True
+                    )(*args)
     _lambda_cnt += 1
     return l
 
@@ -849,16 +855,39 @@ def create_first_order_system(weak_forms):
                                                            transformed_state,
                                                            sorted_inputs)
 
+    if 0:
+        dummy_rhs = None
+        dummy_state = None
+        dummy_inputs = None
+        sorted_state = None
+        sorted_inputs = None
+        state_trafos = None
+
     ss_sys = SymStateSpace(dummy_rhs, dummy_state, dummy_inputs,
                            sorted_state, sorted_inputs,
                            state_trafos)
 
-    # ss_sys = Bunch(rhs=ss_form,
-    #                state=transformed_state,
-    #                inputs=sorted_inputs,
-    #                input_map=input_map,
-    #                orig_state=sorted_state,
-    #                transformations=state_trafos)
+    if 0:
+        # HACK test export
+        f_name = "test_sys"
+        ss_sys.dump(f_name)
+        ss_sys2 = SymStateSpace.from_file(f_name)
+        ss_sys3 = SymStateSpace.from_file(f_name)
+        assert id(ss_sys) != id(ss_sys2)
+        assert id(ss_sys2) != id(ss_sys3)
+        assert id(ss_sys) != id(ss_sys3)
+
+        # assert ss_sys != ss_sys2
+        # assert ss_sys2 == ss_sys3
+
+        assert id(ss_sys.orig_state) != id(ss_sys2.orig_state)
+        for i in range(len(sorted_state)):
+            # assert id(ss_sys.orig_state[i]) != id(ss_sys2.orig_state[i])
+            assert hash(ss_sys.orig_state[i]) == hash(ss_sys2.orig_state[i])
+            assert ss_sys.orig_state[i] == ss_sys2.orig_state[i]
+
+        assert ss_sys.orig_state == ss_sys2.orig_state
+        ss_sys = ss_sys2
 
     return ss_sys
 
@@ -939,13 +968,6 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
 
     # convert to state space system
     ss_sys = create_first_order_system(rep_eqs)
-
-    if 1:
-        # HACK test export
-        f_name = "test_sys"
-        ss_sys.dump(f_name)
-        ss_sys2 = SymStateSpace.from_file(f_name)
-        assert id(ss_sys.orig_state[0]) != id(ss_sys2.orig_state[0])
 
     # process initial conditions
     y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
@@ -1594,7 +1616,7 @@ class SymStateSpace:
         Dump this object
 
         Since pickle won't work for every attribute storage is done in two
-        steps, first nasyt expressions are converted to strings, second
+        steps, first nasty expressions are converted to strings, second
         all are pickled.
         """
         data = (self.rhs, self.state, self.inputs,

@@ -96,7 +96,7 @@ ics = {
 # define the system inputs and their mapping
 input_map = {
     u1: pi.ConstantTrajectory(-500),
-    u2: pi.ConstantTrajectory(0),
+    u2: pi.ConstantTrajectory(500),
 }
 
 # define the variational formulation for both phases
@@ -149,7 +149,6 @@ if 0:
 
     # process initial conditions
     y0 = ss.calc_initial_sate(ss_sys, ics, temp_dom[0])
-
 else:
     results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
 

@@ -871,23 +871,7 @@ def create_first_order_system(weak_forms):
         # HACK test export
         f_name = "test_sys"
         ss_sys.dump(f_name)
-        ss_sys2 = SymStateSpace.from_file(f_name)
-        ss_sys3 = SymStateSpace.from_file(f_name)
-        assert id(ss_sys) != id(ss_sys2)
-        assert id(ss_sys2) != id(ss_sys3)
-        assert id(ss_sys) != id(ss_sys3)
-
-        # assert ss_sys != ss_sys2
-        # assert ss_sys2 == ss_sys3
-
-        assert id(ss_sys.orig_state) != id(ss_sys2.orig_state)
-        for i in range(len(sorted_state)):
-            # assert id(ss_sys.orig_state[i]) != id(ss_sys2.orig_state[i])
-            assert hash(ss_sys.orig_state[i]) == hash(ss_sys2.orig_state[i])
-            assert ss_sys.orig_state[i] == ss_sys2.orig_state[i]
-
-        assert ss_sys.orig_state == ss_sys2.orig_state
-        ss_sys = ss_sys2
+        ss_sys = SymStateSpace.from_file(f_name)
 
     return ss_sys
 
@@ -969,7 +953,7 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     # convert to state space system
     ss_sys = create_first_order_system(rep_eqs)
 
-    # process initial conditions
+    print(">>> projecting initial states")
     y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
 
     # simulate
@@ -995,7 +979,6 @@ def process_results(approximations, input_traj, spat_dom, ss_sys, state_traj,
 
 
 def calc_initial_sate(ss_sys, ics, t0):
-    print(">>> projecting initial states")
     u0 = [ics.pop(u) for u in ss_sys.orig_inputs if u in ics]
     y0_orig = get_state(ics, ss_sys.orig_state, u0)
     if ss_sys.trafos:
@@ -1482,7 +1465,7 @@ def _dummify_system(rhs, state, inputs):
     return dummy_rhs, dummy_state, dummy_inputs
 
 
-def get_state(approx_map, state, extra_args):
+def get_state(approx_map, state, extra_args=()):
     """
     Build initial state vector for time step simulation
 
@@ -1491,7 +1474,7 @@ def get_state(approx_map, state, extra_args):
             either symbolic expressions or lambda functions in the
             spatial dimensions.
         state(iterable): Iterable holding the elements of the state vector.
-        extra_args(list): Extra arguments required to evaluate the approximation
+        extra_args(iterable): Extra arguments required to evaluate the approximation
 
     Returns:
         Numpy array with shape (N,) where `N = len(state)` .
@@ -1587,8 +1570,8 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
             # per convention the time axis comes first
             out_data = np.moveaxis(res.reshape(all_dims), -1, 0)
             data = EvalData(input_data=[temp_dom] + spat_doms,
-                            output_data=out_data,
-                            name=str(approx))
+                            output_data=out_data)
+            # TODO add approximation name
         results.append(data)
 
     return results

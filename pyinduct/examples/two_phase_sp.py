@@ -150,7 +150,9 @@ if 0:
     # process initial conditions
     y0 = ss.calc_initial_sate(ss_sys, ics, temp_dom[0])
 else:
-    results = ss.simulate_system(equations, approx_map, input_map, ics, temp_dom, spat_dom)
+    results = ss.simulate_system(equations, approx_map, input_map, ics,
+                                 temp_dom, spat_dom,
+                                 extra_derivatives=[(z, 1)])
 
 if 0:
     data = str(inputs), str(state), str(sys)
@@ -176,13 +178,16 @@ plots = []
 #     p = pg.plot(res.input_data[1].points, res.output_data[0, :])
 #     plots.append(p)
 
-res_gamma = results[-1]
+res = results[tuple()]
+res_dz = results[(z, 1)]
+res_gamma = res.pop(-1)
+res_gamma_dz = res_dz.pop(-1)
 p = pg.plot(res_gamma.input_data[0].points, res_gamma.output_data)
+p.plot(res_gamma_dz.input_data[0].points, res_gamma_dz.output_data)
 
-
-win = pi.PgAnimatedPlot(results[:-1])
-win1 = pi.PgSurfacePlot(results[0])
-win2 = pi.PgSurfacePlot(results[1])
+win = pi.PgAnimatedPlot(res + res_dz)
+# win1 = pi.PgSurfacePlot(results[0])
+# win2 = pi.PgSurfacePlot(results[1])
 pi.show()
 
 

@@ -363,16 +363,15 @@ if __name__ == "__main__" or test_examples:
 
     # now comes the interesting part
     rep_eqs = ss.substitute_approximations(weak_forms, base_var_map)
-    sys, state, inputs = ss.create_first_order_system(rep_eqs)
+    sys = ss.create_first_order_system(rep_eqs)
 
     temp_domain = pi.Domain((0, 10), num=101)
+    q0 = ss.calc_initial_sate(sys, ic_dict, temp_domain[0])
     np.seterr(under="warn", over="warn")
-    res = ss.simulate_state_space(temp_domain, sys, ic_dict, input_dict,
-                                  inputs, state)
+    sim_dom, sim_state = ss.simulate_state_space(sys, q0, input_dict, temp_domain)
 
     # post processing
-    t_dom = pi.Domain(points=res_weights.t)
-    weight_dict = ss._sort_weights(res_weights.y, state, [approximations])
+    weight_dict = ss._sort_weights(res_weights.y, [approximations],, state
     results = ss._evaluate_approximations(weight_dict,
                                           [approximations],
                                           temp_domain,

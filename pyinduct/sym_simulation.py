@@ -213,11 +213,35 @@ class LumpedApproximation:
 
         # check for extra dependencies
         self._extra_args = list(_find_inputs([self.expression]))
+        self._cbs = {tuple(): self._build_callback()}
 
-        # substitute all known functions and symbols and generate callback
-        self._cb = sp.lambdify(self._syms + self.weights + self._extra_args,
-                               self.expression.subs(get_parameters()),
-                               modules="numpy")
+    def _build_callback(self, orders=tuple()):
+        args = self._syms + self.weights + self._extra_args
+
+        # substitute all known functions and symbols
+        expr = self.expression.subs(get_parameters())
+
+        # build required derivatives
+        if orders:
+            d_expr = expr.diff(*orders)
+            rep_expr, _ = _convert_derivatives([d_expr])
+            expr = rep_expr[0]
+        # generate callback
+        cb = sp.lambdify(args, expr, modules="numpy")
+        return cb
+
+    def _get_derivative_args(self, orders):
+        if orders is None:
+            orders = {}
+
+        d_args = []
+        for sym, order in orders.items():
+            if sym in self._syms:
+                d_args += [sym, order]
+            else:
+                raise ValueError("Symbol of required derivative not "
+                                 "present in symbolic expression.")
+        return d_args
 
     @property
     def expression(self):
@@ -247,9 +271,20 @@ class LumpedApproximation:
 
     def __call__(self, *args, **kwargs):
         if args:
-            return self._cb(*args)
-        if kwargs:
-            return self._cb(*[kwargs[w] for w in self._weights])
+            call_args = args
+        elif kwargs:
+            call_args = [kwargs[w] for w in self._weights]
+        else:
+            raise ValueError("No input provided")
+
+        # acquire callback
+        d_args = kwargs.get("der_orders", tuple())
+        callback = self._cbs.get(d_args, None)
+        if callback is None:
+            callback = self._build_callback(d_args)
+            self._cbs.update({d_args: callback})
+
+        return callback(*call_args)
 
     def approximate_function(self, func, *extra_args, use_collocation=False):
         """
@@ -945,7 +980,8 @@ def _run_evaluations(weak_forms):
     return new_forms
 
 
-def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
+def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom,
+                    extra_derivatives=None):
 
     # build complete form
     rep_eqs, approximations = substitute_approximations(weak_forms, approx_map)
@@ -962,19 +998,27 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom):
     # extract original state
     state_traj, input_traj = calc_original_state(sim_state, ss_sys, input_map, t_dom)
 
-    results = process_results(ics.keys(), input_traj, spat_dom, ss_sys,
-                              state_traj, t_dom)
+    req_derivatives = [tuple()]
+    if extra_derivatives is not None:
+        req_derivatives += extra_derivatives
 
+    results = {}
+    for der in req_derivatives:
+        res = process_results(state_traj, ss_sys, ics.keys(),
+                              t_dom, spat_dom,
+                              input_traj,
+                              derivative_orders=der)
+        results[der] = res
     return results
 
 
-def process_results(approximations, input_traj, spat_dom, ss_sys, state_traj,
-                    t_dom):
+def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
+                    input_traj=None, derivative_orders=None):
     print(">>> processing simulation results")
-    weight_dict, extra_dict = _sort_weights(state_traj, input_traj, ss_sys,
-                                            approximations)
+    weight_dict, extra_dict = _sort_weights(state_traj, ss_sys, approximations,
+                                            input_traj)
     results = _evaluate_approximations(weight_dict, extra_dict, approximations,
-                                       t_dom, spat_dom)
+                                       t_dom, spat_dom, derivative_orders)
     return results
 
 
@@ -988,7 +1032,7 @@ def calc_initial_sate(ss_sys, ics, t0):
         return y0_orig
 
 
-def calc_original_state(sim_results, ss_sys, input_map, temp_dom):
+def calc_original_state(sim_results, ss_sys, input_map=None, temp_dom=None):
     # check whether state has been altered
     if ss_sys.trafos is None:
         return sim_results
@@ -1084,6 +1128,8 @@ def _find_derivatives(weak_forms, sym):
 
 
 def _convert_higher_derivative(weak_forms, derivative, sym=None):
+    if not hasattr(weak_forms, ".xreplace"):
+        weak_forms = sp.Matrix(weak_forms)
 
     target_set = set()
     subs_list = []
@@ -1498,7 +1544,7 @@ def get_state(approx_map, state, extra_args=()):
     return y0
 
 
-def _sort_weights(weights, inp_values, ss_sys, approximations):
+def _sort_weights(weights, ss_sys, approximations, inp_values):
     """ Coordinate a given weight set with approximations """
     weight_dict = dict()
     extra_dict = dict()
@@ -1531,7 +1577,8 @@ def _sort_weights(weights, inp_values, ss_sys, approximations):
     return weight_dict, extra_dict
 
 
-def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, spat_doms):
+def _evaluate_approximations(weight_dict, extra_dict, approximations,
+                             temp_dom, spat_doms, derivative_orders=None):
     """
     Evaluate approximations on the given grids
     """
@@ -1565,7 +1612,7 @@ def _evaluate_approximations(weight_dict, extra_dict, approximations, temp_dom, 
             else:
                 res = np.zeros(len(r_grids[0]))
                 for idx, row in enumerate(args):
-                    res[idx] = approx(*row)
+                    res[idx] = approx(*row, der_orders=derivative_orders)
 
             # per convention the time axis comes first
             out_data = np.moveaxis(res.reshape(all_dims), -1, 0)

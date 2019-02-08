@@ -890,23 +890,9 @@ def create_first_order_system(weak_forms):
                                                            transformed_state,
                                                            sorted_inputs)
 
-    if 0:
-        dummy_rhs = None
-        dummy_state = None
-        dummy_inputs = None
-        sorted_state = None
-        sorted_inputs = None
-        state_trafos = None
-
     ss_sys = SymStateSpace(dummy_rhs, dummy_state, dummy_inputs,
                            sorted_state, sorted_inputs,
                            state_trafos)
-
-    if 0:
-        # HACK test export
-        f_name = "test_sys"
-        ss_sys.dump(f_name)
-        ss_sys = SymStateSpace.from_file(f_name)
 
     return ss_sys
 
@@ -1008,6 +994,9 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom,
 def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
                     input_traj=None, extra_derivatives=None):
     print(">>> processing simulation results")
+    assert state_traj.shape[0] == len(t_dom)
+    assert state_traj.shape[1] == len(ss_sys.state)
+
     weight_dict, extra_dict = _sort_weights(state_traj, ss_sys, approximations,
                                             input_traj)
 
@@ -1035,8 +1024,8 @@ def calc_initial_sate(ss_sys, ics, t0):
 
 def calc_original_state(sim_results, ss_sys, input_map=None, temp_dom=None):
     # check whether state has been altered
-    if ss_sys.trafos is None:
-        return sim_results
+    if not ss_sys.trafos:
+        return sim_results, None
 
     # recover input trajectories
     input_traj = np.zeros((len(temp_dom), len(ss_sys.orig_inputs)))
@@ -1547,6 +1536,7 @@ def get_state(approx_map, state, extra_args=()):
 
 def _sort_weights(weights, ss_sys, approximations, inp_values):
     """ Coordinate a given weight set with approximations """
+
     weight_dict = dict()
     extra_dict = dict()
     state_elements = list(ss_sys.orig_state)

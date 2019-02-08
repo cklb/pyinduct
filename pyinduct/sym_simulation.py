@@ -203,13 +203,16 @@ def create_lag1st_base(sym, bounds, num):
 
 class LumpedApproximation:
 
-    def __init__(self, symbols, ess_expr, nat_expr, weights, base_map, bcs):
+    def __init__(self, symbols, ess_expr, nat_expr, weights, base_map, dom, bcs):
         self._syms = symbols
         self._ess_expr = ess_expr
         self._nat_expr = nat_expr
         self._weights = weights
         self._base_map = base_map
+        self._dom = dom
         self._bcs = bcs
+
+        # TODO add domain
 
         # check for extra dependencies
         self._extra_args = list(_find_inputs([self.expression]))
@@ -539,7 +542,8 @@ def create_lag1ast_base(sym, bounds, num):
     return funcs
 
 
-def create_approximation(syms, base_lbl, boundary_conditions=None, weights=None):
+def create_approximation(syms, base_lbl,
+                         boundary_conditions=None, weights=None, domain=None):
     """
     Create a lumped approximation of a distributed variable
 
@@ -552,6 +556,7 @@ def create_approximation(syms, base_lbl, boundary_conditions=None, weights=None)
         syms((list of) Symbol(s)): Symbol(s) to use for approximation.
             (Dimension to discretise)
         base_lbl(str): Label of the base to use
+        domain((list of) tuple): Domain of the approximation.
 
     Keyword Args:
         boundary_conditions(list): List of boundary conditions that have to be
@@ -627,6 +632,7 @@ def create_approximation(syms, base_lbl, boundary_conditions=None, weights=None)
                                    x_ess, x_nat,
                                    weights,
                                    base_mapping,
+                                   domain,
                                    boundary_conditions)
 
     return x_approx

@@ -8,12 +8,14 @@ import pyinduct.sym_simulation as ss
 
 import pyqtgraph as pg
 
+complete_dom = (0, 2)
+
 # approximation order
 N = 5
 
-# spatial domains
+# split, transformed, constant domain
 spat_dom = pi.Domain((0, 1), num=N)
-zb_dom = (0, 1)
+zeta = sp.symbols("zeta:2")
 
 # temporal domain
 temp_dom = pi.Domain((0, 5), num=100)
@@ -48,8 +50,8 @@ alpha, Gamma, k, rho, L, Tm = sp.symbols(("alpha:2",
 param_list = [
     (alpha[0], .591/(2.05*.91)),
     (alpha[1], 2.2/(4.19*1)),
-    (Gamma[0], zb_dom[0]),
-    (Gamma[1], zb_dom[1]),
+    (Gamma[0], complete_dom[0]),
+    (Gamma[1], complete_dom[1]),
     (k[0], .591),
     (k[1], 2.2),
     (rho[0], .91),
@@ -59,6 +61,9 @@ param_list = [
     (Tm, 0),
 ]
 ss.register_parameters(*param_list)
+
+# define original system
+zeta_trafo = [(z - Gamma[idx])/(gamma - Gamma[idx]) for idx in range(2)]
 
 # define boundaries
 boundaries_x1 = [
@@ -72,19 +77,26 @@ boundaries_x2 = [
 
 # define approximation basis
 if 1:
-    nodes = pi.Domain(zb_dom, num=N)
+    nodes = pi.Domain(spat_dom.bounds, num=N)
     fem_base = pi.LagrangeFirstOrder.cure_interval(nodes)
 else:
     fem_base = ss.create_lag1ast_base(z, zb_dom, N)
 pi.register_base("fem", fem_base)
-gamma_base = pi.Base(pi.Function.from_constant(1, domain=zb_dom))
-pi.register_base("gamma", gamma_base)
 
 # create approximations, homogenizing where needed
 x1_approx = ss.create_approximation(z, "fem", boundaries_x1)
 x2_approx = ss.create_approximation(z, "fem", boundaries_x2)
 # gamma_approx = ss.create_approximation(z, "gamma")
 gamma_approx = ss.get_weight()
+
+if 0:
+    # TODO coord trafo
+    x_part_1 = x1_approx.expression.subs(z, zeta_trafo[0])
+    x_part_2 = x2_approx.expression.subs(z, zeta_trafo[1])
+    x_expr = sp.Piecewise((x_part_1, z < gamma),
+                          # (Tm, z == gamm),
+                          (x_part_2, z > gamma))
+    x_approx = ss.LumpedApproximation()
 
 # define the initial conditions for each approximation
 ics = {
@@ -106,13 +118,13 @@ for idx, (x, u, phi) in enumerate(zip([x1, x2],
                                       [phi1_k, phi2_k])):
     beta = (gamma - Gamma[idx])
     expr = (
-        ss.InnerProduct(x.diff(t), phi, zb_dom)
+        ss.InnerProduct(x.diff(t), phi, spat_dom.bounds)
         - alpha[idx] / beta ** 2 * (
             (x.diff(z) * phi).subs(z, 1)
             - (x.diff(z) * phi).subs(z, 0)
-            - ss.InnerProduct(x.diff(z), phi.diff(z), zb_dom)
+            - ss.InnerProduct(x.diff(z), phi.diff(z), spat_dom.bounds)
         )
-        - gamma.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, zb_dom)
+        - gamma.diff(t) / beta * ss.InnerProduct(z * x.diff(z), phi, spat_dom.bounds)
     )
     equations.append(expr)
 

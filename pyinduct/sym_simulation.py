@@ -998,27 +998,28 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom,
     # extract original state
     state_traj, input_traj = calc_original_state(sim_state, ss_sys, input_map, t_dom)
 
+    results = process_results(state_traj, ss_sys, ics.keys(),
+                              t_dom, spat_dom,
+                              input_traj,
+                              extra_derivatives)
+    return results
+
+
+def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
+                    input_traj=None, extra_derivatives=None):
+    print(">>> processing simulation results")
+    weight_dict, extra_dict = _sort_weights(state_traj, ss_sys, approximations,
+                                            input_traj)
+
     req_derivatives = [tuple()]
     if extra_derivatives is not None:
         req_derivatives += extra_derivatives
 
     results = {}
     for der in req_derivatives:
-        res = process_results(state_traj, ss_sys, ics.keys(),
-                              t_dom, spat_dom,
-                              input_traj,
-                              derivative_orders=der)
+        res = _evaluate_approximations(weight_dict, extra_dict, approximations,
+                                       t_dom, spat_dom, der)
         results[der] = res
-    return results
-
-
-def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
-                    input_traj=None, derivative_orders=None):
-    print(">>> processing simulation results")
-    weight_dict, extra_dict = _sort_weights(state_traj, ss_sys, approximations,
-                                            input_traj)
-    results = _evaluate_approximations(weight_dict, extra_dict, approximations,
-                                       t_dom, spat_dom, derivative_orders)
     return results
 
 

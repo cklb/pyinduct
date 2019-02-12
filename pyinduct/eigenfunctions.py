@@ -1106,7 +1106,7 @@ class TransformedSecondOrderEigenfunction(Function):
 
         if (not len(dgl_coefficients) == 3
             and isinstance(dgl_coefficients, (list, tuple))
-            and all([isinstance(coef, collections.Callable)
+            and all([isinstance(coef, collections.abc.Callable)
                      or isinstance(coef, (int, float))
                      for coef in dgl_coefficients])):
             raise TypeError
@@ -1242,7 +1242,7 @@ class FiniteTransformFunction(Function):
 
     def __init__(self, function, M, l, scale_func=None, nested_lambda=False):
 
-        if not isinstance(function, collections.Callable):
+        if not isinstance(function, collections.abc.Callable):
             raise TypeError
         if (not isinstance(M, np.ndarray) or len(M.shape) != 2
                 or np.diff(M.shape) != 0 or M.shape[0] % 1 != 0):

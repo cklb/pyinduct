@@ -159,7 +159,7 @@ def eliminate_advection_term(param, domain_end):
         a2, a1, a0, alpha, beta = param
 
     if isinstance(a1, Function):
-        if not isinstance(a0, collections.Callable):
+        if not isinstance(a0, collections.abc.Callable):
             a0_z = Function.from_constant(a0)
         else:
             a0_z = a0
@@ -171,7 +171,7 @@ def eliminate_advection_term(param, domain_end):
 
     if alpha is None:
         alpha_n = None
-    elif isinstance(a1, collections.Callable):
+    elif isinstance(a1, collections.abc.Callable):
         alpha_n = a1(0) / 2. / a2 + alpha
     else:
         alpha_n = a1 / 2. / a2 + alpha

@@ -194,10 +194,10 @@ class Function(BaseFraction):
     def derivative_handles(self, eval_handle_derivatives):
         if eval_handle_derivatives is None:
             eval_handle_derivatives = []
-        if not isinstance(eval_handle_derivatives, collections.Iterable):
+        if not isinstance(eval_handle_derivatives, collections.abc.Iterable):
             eval_handle_derivatives = [eval_handle_derivatives]
         for der_handle in eval_handle_derivatives:
-            if not isinstance(der_handle, collections.Callable):
+            if not isinstance(der_handle, collections.abc.Callable):
                 raise TypeError("derivative_handles must be callable")
         self._derivative_handles = eval_handle_derivatives
 
@@ -208,7 +208,7 @@ class Function(BaseFraction):
     @function_handle.setter
     def function_handle(self, eval_handle):
         # handle must be callable
-        if not isinstance(eval_handle, collections.Callable):
+        if not isinstance(eval_handle, collections.abc.Callable):
             raise TypeError("callable has to be provided as function_handle")
 
         # handle must return scalar when called with scalar
@@ -353,7 +353,7 @@ class Function(BaseFraction):
             return _scaled_func
 
         new_obj = deepcopy(self)
-        if isinstance(factor, collections.Callable):
+        if isinstance(factor, collections.abc.Callable):
             # derivatives are lost
             new_obj.derivative_handles = None
             new_obj.function_handle = scale_factory(self._function_handle)

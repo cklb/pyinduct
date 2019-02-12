@@ -914,7 +914,7 @@ def _handle_input_derivatives(ss_form, sorted_state, inputs, weak_forms):
             sorted_state,
             inputs)
     else:
-        print("\t-no derivatives found")
+        logger.debug("no derivatives found")
         transformed_state = sorted_state
         state_trafos = tuple()
 

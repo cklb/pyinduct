@@ -199,7 +199,7 @@ class ScalarFunction(SpatialPlaceholder):
             f = Function.from_constant(scalar, **kwargs)
         elif isinstance(scalar, Function):
             f = scalar
-        elif isinstance(scalar, collections.Callable):
+        elif isinstance(scalar, collections.abc.Callable):
             f = Function(scalar, **kwargs)
         else:
             raise TypeError("Coefficient type not understood.")
@@ -229,7 +229,7 @@ class Input(Placeholder):
     """
 
     def __init__(self, function_handle, index=0, order=0, exponent=1):
-        if not isinstance(function_handle, collections.Callable):
+        if not isinstance(function_handle, collections.abc.Callable):
             raise TypeError("callable object has to be provided.")
         if not isinstance(index, int) or index < 0:
             raise TypeError("index must be a positive integer.")

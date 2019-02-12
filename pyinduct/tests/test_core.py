@@ -176,7 +176,7 @@ class FunctionTestCase(unittest.TestCase):
     def test_call(self):
 
         def func(x):
-            if isinstance(x, collections.Iterable):
+            if isinstance(x, collections.abc.Iterable):
                 raise TypeError("no vectorial stuff allowed!")
             return 2 ** x
 

@@ -1097,13 +1097,14 @@ def project_on_base(state, base):
 
     # compute <x(z, t), phi_i(z)> (vector)
     projections = calculate_scalar_product_matrix(dot_product_l2,
-                                                  Base(state),
-                                                  base).squeeze()
+                                                  base,
+                                                  Base(state)).squeeze()
 
     # compute <phi_i(z), phi_j(z)> for 0 < i, j < n (matrix)
     scale_mat = calculate_scalar_product_matrix(dot_product_l2, base, base)
 
-    return np.reshape(np.dot(np.linalg.inv(scale_mat), projections), (scale_mat.shape[0], ))
+    weight_matrix = np.dot(np.linalg.inv(scale_mat), projections).T
+    return weight_matrix.squeeze()
 
 
 def project_on_bases(states, canonical_equations):

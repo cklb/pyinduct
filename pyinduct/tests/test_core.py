@@ -686,22 +686,34 @@ class ProjectionTest(unittest.TestCase):
         self.assertRaises(TypeError, pi.project_on_base, np.sin, np.sin)
 
     def test_projection_on_lag1st(self):
-        weights = [pi.project_on_base(self.functions[1], self.lag_base),
-                   pi.project_on_base(self.functions[2], self.lag_base),
-                   pi.project_on_base(self.functions[3], self.lag_base)]
+        # call should be able to handle single args
+        weights_single = np.array([
+            pi.project_on_base(self.functions[1], self.lag_base),
+            pi.project_on_base(self.functions[2], self.lag_base),
+            pi.project_on_base(self.functions[3], self.lag_base)])
+
+        # vectorized calling should also be possible
+        weights_parallel = pi.project_on_base(self.functions[1:], self.lag_base)
+        np.testing.assert_array_almost_equal(weights_parallel, weights_single)
 
         # linear function -> should be fitted exactly
-        np.testing.assert_array_almost_equal(weights[0], self.functions[1](self.nodes))
+        np.testing.assert_array_almost_equal(weights_single[0],
+                                             self.functions[1](self.nodes))
 
         # quadratic function -> should be fitted somehow close
-        np.testing.assert_array_almost_equal(weights[1], self.functions[2](self.nodes), decimal=0)
+        np.testing.assert_array_almost_equal(weights_single[1],
+                                             self.functions[2](self.nodes),
+                                             decimal=0)
 
         # trig function -> will be crappy
-        np.testing.assert_array_almost_equal(weights[2], self.functions[3](self.nodes), decimal=1)
+        np.testing.assert_array_almost_equal(weights_single[2],
+                                             self.functions[3](self.nodes),
+                                             decimal=1)
 
         if show_plots:
-            # since test function are lagrange1st order, plotting the results is fairly easy
-            for idx, w in enumerate(weights):
+            # since test function are lagrange1st order,
+            # plotting the results is fairly easy
+            for idx, w in enumerate(weights_single):
                 pw = pg.plot(title="Weights {0}".format(idx))
                 pw.plot(x=self.z_values, y=self.real_values[idx + 1], pen="r")
                 pw.plot(x=self.nodes.points, y=w, pen="b")

@@ -1891,6 +1891,7 @@ class EvalData:
         enable_extrapolation (bool): If True, internal interpolators will allow
             extrapolation. Otherwise, the last giben value will be repeated for
             1D cases and the result will be padded with zeros for cases > 1D.
+        use_spline (bool): If True, BivariateSpline is used as interpolator.
 
     Examples:
         When instantiating 1d EvalData objects, the list can be omitted
@@ -1945,7 +1946,8 @@ class EvalData:
     def __init__(self, input_data, output_data,
                  input_labels=None, input_units=None,
                  enable_extrapolation=False,
-                 fill_axes=False, name=None):
+                 fill_axes=False, name=None,
+                 use_spline=False):
         # check type and dimensions
         if isinstance(input_data, np.ndarray) and input_data.ndim == 1:
             # accept single array for single dimensional input
@@ -1991,8 +1993,13 @@ class EvalData:
         # output_data has to contain len(input_data) dimensions
         assert len(input_data) == output_data.ndim
 
-        for dim in range(len(input_data)):
-            assert len(input_data[dim]) == output_data.shape[dim]
+        input_dims = tuple(len(inp) for inp in input_data)
+        if input_dims != output_data.shape:
+            raise ValueError("Dimensions of input vectors {} do not agree with "
+                             "output data shape: {}".format(input_dims,
+                                                            output_data.shape))
+        # for dim in range(len(input_data)):
+        #     assert len(input_data[dim]) == output_data.shape[dim]
 
         self.input_data = input_data
         self.output_data = output_data
@@ -2016,7 +2023,7 @@ class EvalData:
                 raise ValueError("Extrapolation not supported for 2d data. See "
                                  "https://github.com/scipy/scipy/issues/8099"
                                  "for details.")
-            if len(input_data[0]) > 3 and len(input_data[1]) > 3:
+            if len(input_data[0]) > 3 and len(input_data[1]) > 3 and use_spline:
                 # special treatment for very common case (faster than interp2d)
                 # boundary values are used as fill values
                 self._interpolator = RectBivariateSpline(*input_data,

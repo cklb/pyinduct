@@ -292,26 +292,29 @@ class LumpedApproximation:
 
         return callback(*call_args)
 
-    def approximate_function(self, func, *extra_args, use_collocation=False):
+    def approximate_functions(self, funcs, *extra_args, use_collocation=False):
         """
         Project the given function into the subspace of this Approximation
 
         Args:
-            func(sp.Function): Function expression to approximate
+            funcs(array-like): "Sympifiable" expression to approximate.
             extra_args(list): Extra arguments needed for evaluation.
         """
-        f = sp.sympify(func)
-        hom_func = (f - self._ess_expr).subs(get_parameters())
-        hom_func = hom_func.subs(list(zip(self._extra_args, extra_args)))
+        functions = []
+        for func in funcs:
+            f = sp.sympify(func)
+            hom_func = (f - self._ess_expr).subs(get_parameters())
+            hom_func = hom_func.subs(list(zip(self._extra_args, extra_args)))
 
-        # if use_collocation:
-        #     weights = []
-        #     for f in self.base:
-        #         w = f.evalf()
+            # if use_collocation:
+            #     weights = []
+            #     for f in self.base:
+            #         w = f.evalf()
 
-        cb = sp.lambdify(self._syms, hom_func, modules="numpy")
+            cb = sp.lambdify(self._syms, hom_func, modules="numpy")
+            functions.append(Function(cb))
 
-        weights = project_on_base(Function(cb), Base(self.base))
+        weights = project_on_base(functions, Base(self.base))
         return weights
 
     def get_spatial_approx(self, weights, *extra_args):
@@ -1021,7 +1024,7 @@ def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
 
 def calc_initial_sate(ss_sys, ics, t0):
     u0 = [ics.pop(u) for u in ss_sys.orig_inputs if u in ics]
-    y0_orig = get_state(ics, ss_sys.orig_state, u0)
+    y0_orig = get_state(ics, ss_sys.orig_state, extra_args=u0)
     if ss_sys.trafos:
         y0 = np.squeeze(ss_sys.trafos[0](t0, u0, y0_orig))
         return y0
@@ -1525,7 +1528,9 @@ def get_state(approx_map, state, extra_args=()):
             either symbolic expressions or lambda functions in the
             spatial dimensions.
         state(iterable): Iterable holding the elements of the state vector.
-        extra_args(iterable): Extra arguments required to evaluate the approximation
+        extra_args(iterable): Extra arguments required to evaluate the
+            approximations basis functions. (Mostly given by inhomogenoues
+            neumann boundaries)
 
     Returns:
         Numpy array with shape (N,) where `N = len(state)` .
@@ -1534,7 +1539,7 @@ def get_state(approx_map, state, extra_args=()):
     init_weights = dict()
     for key, val in approx_map.items():
         if isinstance(key, LumpedApproximation):
-            _weight_set = key.approximate_function(val, *extra_args)
+            _weight_set = key.approximate_functions(val, *extra_args)
             new_d = dict(zip(key.weights, _weight_set))
         elif _weight_letter in str(key):
             new_d = {key: val}

@@ -91,7 +91,7 @@ input_dict = {
 }
 
 if 0:
-    state0 = x_approx.approximate_function(x0)
+    state0 = x_approx.approximate_functions(x0)
     a = x_approx.get_spatial_approx(state0)
     vals = np.linspace(*spat_bounds)
     plt.plot(vals, a(vals))

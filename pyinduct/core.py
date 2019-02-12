@@ -1103,7 +1103,7 @@ def project_on_base(state, base):
     # compute <phi_i(z), phi_j(z)> for 0 < i, j < n (matrix)
     scale_mat = calculate_scalar_product_matrix(dot_product_l2, base, base)
 
-    weight_matrix = np.dot(np.linalg.inv(scale_mat), projections).T
+    weight_matrix = np.dot(np.linalg.inv(scale_mat), projections)
     return weight_matrix.squeeze()
 
 

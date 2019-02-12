@@ -65,7 +65,7 @@ input_map = {
 if 0:
     # state0 = x_approx.approximate_function(ics[x_approx], [ics[u1]])
     # a = x_approx.get_spatial_approx(state0, [ics[u1]])
-    state0 = x_approx.approximate_function(ics[x_approx])
+    state0 = x_approx.approximate_functions(ics[x_approx])
     a = x_approx.get_spatial_approx(state0)
     vals = np.linspace(*spat_bounds, num=1000)
     plt.plot(vals, a(vals))

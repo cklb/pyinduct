@@ -694,7 +694,7 @@ class ProjectionTest(unittest.TestCase):
 
         # vectorized calling should also be possible
         weights_parallel = pi.project_on_base(self.functions[1:], self.lag_base)
-        np.testing.assert_array_almost_equal(weights_parallel, weights_single)
+        np.testing.assert_array_almost_equal(weights_parallel, weights_single.T)
 
         # linear function -> should be fitted exactly
         np.testing.assert_array_almost_equal(weights_single[0],

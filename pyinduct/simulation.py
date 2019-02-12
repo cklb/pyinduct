@@ -4,6 +4,7 @@ and functions for postprocessing of simulation data.
 """
 
 import warnings
+import logging
 from abc import ABCMeta, abstractmethod
 from collections import OrderedDict, Callable
 from copy import copy
@@ -54,6 +55,7 @@ class SimulationInput(object, metaclass=ABCMeta):
     """
 
     def __init__(self, name=""):
+        self.logger = logging.getLogger(self.__class__.__name__)
         self._time_storage = []
         self._value_storage = {}
         self.name = name

@@ -1,3 +1,4 @@
+import logging
 import pickle
 import dill
 import numpy as np
@@ -8,10 +9,13 @@ import pyinduct.sym_simulation as ss
 
 import pyqtgraph as pg
 
+logging.basicConfig()
+logging.getLogger().setLevel(logging.DEBUG)
+
 complete_dom = (0, 2)
 
 # approximation order
-N = 5
+N = 20
 
 # split, transformed, constant domain
 spat_dom = pi.Domain((0, 1), num=N)

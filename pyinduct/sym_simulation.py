@@ -14,6 +14,7 @@ from scipy.integrate import solve_ivp, ode
 from tqdm import tqdm
 # from jitcode import jitcode, t, y, UnsuccessfulIntegration
 import dill
+import logging
 
 from matplotlib import pyplot as plt
 
@@ -23,6 +24,8 @@ from .core import (Domain, Function, Base,
                    integrate_function,
                    project_on_base, EvalData, Bunch)
 from .simulation import simulate_state_space as old_ss_sim
+
+logger = logging.getLogger(__name__)
 
 time = sp.symbols("t", real=True)
 space = sp.symbols("z:3", real=True)
@@ -743,7 +746,7 @@ def substitute_approximations(weak_form, mapping):
         Extended equation system with substituted mapping.
     """
 
-    print(">>> expanding generic formulation")
+    logger.info("expanding generic formulation")
     ext_form, ext_mapping = _expand_kth_terms(weak_form, mapping)
 
     def wrap_expr(expr, *sym):
@@ -781,7 +784,7 @@ def substitute_approximations(weak_form, mapping):
         else:
             rep_list.append(gen_func_subs_pair(sym, approx))
 
-    print(">>> substituting symbolic approximations")
+    logger.info("substituting symbolic approximations")
     rep_eqs = []
     for eq in tqdm(ext_form):
         rep_eq = eq
@@ -852,46 +855,46 @@ def create_first_order_system(weak_forms):
 
     new_forms = sp.Matrix(weak_forms)
 
-    print(">>> simplifying integrals")
+    logger.info("simplifying integrals")
     new_forms = _simplify_integrals(new_forms)
     # new_forms = weak_forms
     # sp.pprint(new_forms, num_columns=200)
 
-    print(">>> substituting derivatives")
+    logger.info("substituting derivatives")
     new_forms, targets = _convert_derivatives(new_forms)
     # sp.pprint(new_forms, num_columns=200)
 
-    print(">>> substituting parameters")
+    logger.info("substituting parameters")
     new_forms = new_forms.xreplace(get_parameters())
     # sp.pprint(new_forms, num_columns=200)
 
-    print(">>> solving integrals")
+    logger.info("solving integrals")
     new_forms = _solve_integrals(new_forms)
     # sp.pprint(new_forms, num_columns=200)
 
-    print(">>> running remaining evaluations")
+    logger.info("running remaining evaluations")
     new_forms = _run_evaluations(new_forms)
     # sp.pprint(ss_form)
 
-    print(">>> identifying inputs")
+    logger.info("identifying inputs")
     inputs = _find_inputs(new_forms)
     sorted_inputs = sp.Matrix(sorted(inputs, key=lambda x: str(x)))
     # sp.pprint(sorted_inputs)
 
-    print(">>> identifying state components")
+    logger.info("identifying state components")
     state_elems = _find_weights(new_forms)
     sorted_state = sp.Matrix(sorted(state_elems,
                                     key=lambda x: float(str(x)[3:-3])))
     # sp.pprint(sorted_state)
 
-    print(">>> solving for targets:")
+    logger.info("solving for targets")
     ss_form = _solve_for_derivatives(new_forms, sorted_state)
 
-    print(">>> checking for input derivatives:")
+    logger.info("checking for input derivatives")
     ss_form, transformed_state, state_trafos = _handle_input_derivatives(
         ss_form, sorted_state, sorted_inputs, weak_forms)
 
-    print(">>> substituting functions with dummy variables:")
+    logger.info("substituting functions with dummy variables")
     dummy_rhs, dummy_state, dummy_inputs = _dummify_system(ss_form,
                                                            transformed_state,
                                                            sorted_inputs)
@@ -907,7 +910,7 @@ def _handle_input_derivatives(ss_form, sorted_state, inputs, weak_forms):
     input_derivatives = [d for d in _find_derivatives(weak_forms, time)
                          if d.args[0] in inputs]
     if input_derivatives:
-        print("\t-derivatives found")
+        logger.debug("derivatives found")
         ss_form, transformed_state, state_trafos = _eliminate_input_derivatives(
             input_derivatives,
             ss_form,
@@ -933,17 +936,17 @@ def _solve_for_derivatives(new_forms, sorted_state):
     Returns:
         sp.Matrix: Right-hand side of the state space formulation
     """
+    sorted_targets = [s.diff(time) for s in sorted_state]
     if 0:
-        sol_dict = sp.solve(new_forms, targets)
+        sol_dict = sp.solve(new_forms, sorted_targets)
         # sp.pprint(ss_form)
 
-        print(">>> building statespace form")
+        logger.info("building statespace form")
         ss_form = sp.Matrix([sol_dict[s.diff(time)] for s in sorted_state])
         # sp.pprint(ss_form)
     else:
-        sorted_targets = [s.diff(time) for s in sorted_state]
         # rep_map = {t: d for t, d in zip(sorted_targets, dummy_targets)}
-        print("\t-collecting coefficient matrices")
+        logger.debug("\t-collecting coefficient matrices")
         A, b = sp.linear_eq_to_matrix(sp.Matrix(new_forms), *sorted_targets)
         if 0:
             sp.pprint(A, num_columns=200)
@@ -952,7 +955,7 @@ def _solve_for_derivatives(new_forms, sorted_state):
             sp.pprint(c, num_columns=200)
             quit()
 
-        print("\t-solving equation system")
+        logger.debug("\t-solving equation system")
         ss_form = A.LUsolve(b)
     return ss_form
 
@@ -981,7 +984,6 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom,
     # convert to state space system
     ss_sys = create_first_order_system(rep_eqs)
 
-    print(">>> projecting initial states")
     y0 = calc_initial_sate(ss_sys, ics, temp_dom[0])
 
     # simulate
@@ -999,7 +1001,6 @@ def simulate_system(weak_forms, approx_map, input_map, ics, temp_dom, spat_dom,
 
 def process_results(state_traj, ss_sys, approximations, t_dom, spat_dom,
                     input_traj=None, extra_derivatives=None):
-    print(">>> processing simulation results")
     assert state_traj.shape[0] == len(t_dom)
     assert state_traj.shape[1] == len(ss_sys.state)
 
@@ -1430,7 +1431,7 @@ def simulate_state_space(ss_sys, y0, input_map, temp_dom):
         ode.set_integrator("lsoda")
         ode.set_initial_value(y0, temp_dom[0])
 
-        print(">>> running time step simulation")
+        logger.info("running time step simulation")
         np.seterr(under="warn")
         res = []
         t0 = clock()
@@ -1443,40 +1444,48 @@ def simulate_state_space(ss_sys, y0, input_map, temp_dom):
 
         return np.array(res)
     else:
-        print(">>> building expressions")
-        if 0:
-            # TODO check if this provides a speedup for explicit linear systems
-            A, b = sp.linear_eq_to_matrix(ss_sys.rhs, *ss_sys.state)
-            rhs = A @ ss_sys.state + b
-        else:
-            rhs = ss_sys.rhs
+        _rhs, _jac = get_rhs(ss_sys, input_map)
 
-        args = [time, ss_sys.state, ss_sys.inputs]
-        rhs_cb = sp.lambdify(args, expr=rhs, modules="numpy")
-
-        def _rhs(_t, _q):
-            # print(_t)
-            _u = [input_map[inp](time=_t, weights=_q)
-                  for inp in ss_sys.orig_inputs]
-            y_dt = np.ravel(rhs_cb(_t, _q, _u))
-            return y_dt
-
-        if 0:
-            # TODO check if jacobian improves performance
-            rhs_jac = ss_sys.rhs.jacobian(args[-1])
-            jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
-
-            def _jac(t, y):
-                u = [input_map[inp](time=t, weights=y)
-                     for inp in ss_sys.orig_inputs]
-                jac = jac_cb(t, y, u)
-                return jac
-
-            return _rhs, _jac
-
-        print(">>> running time step simulation")
+        logger.info("running time step simulation")
         t_dom, res = old_ss_sim(_rhs, y0, temp_dom)
         return t_dom, res
+
+
+def get_rhs(ss_sys, input_map=None):
+    logger.info("building expressions")
+    if 0:
+        # TODO check if this provides a speedup for explicit linear systems
+        A, b = sp.linear_eq_to_matrix(ss_sys.rhs, *ss_sys.state)
+        rhs = A @ ss_sys.state + b
+    else:
+        rhs = ss_sys.rhs
+
+    args = [time, ss_sys.state, ss_sys.inputs]
+    rhs_cb = sp.lambdify(args, expr=rhs, modules="numpy")
+
+    def _rhs(_t, _q, _u=None):
+        # print(_t)
+        if _u is None:
+            _u = [input_map[inp](time=_t, weights=_q)
+                  for inp in ss_sys.orig_inputs]
+        y_dt = np.ravel(rhs_cb(_t, _q, _u))
+        return y_dt
+
+    if 0:
+        # TODO check if jacobian improves performance
+        rhs_jac = ss_sys.rhs.jacobian(ss_sys.state)
+        jac_cb = sp.lambdify(args, expr=rhs_jac, modules="numpy")
+
+        def _jac(_t, _q, _u=None):
+            if _u is None:
+                u = [input_map[inp](time=_t, weights=_q)
+                     for inp in ss_sys.orig_inputs]
+            jac = jac_cb(_t, _q, _u)
+            return jac
+    else:
+        _jac = None
+
+    return _rhs, _jac
 
 
 def _dummify_system(rhs, state, inputs):

@@ -1521,7 +1521,7 @@ def _dummify_system(rhs, state, inputs):
 
 def get_state(approx_map, state, extra_args=()):
     """
-    Build initial state vector for time step simulation
+    Build state vector for an approximated system
 
     Args:
         approx_map(dict): Mapping that associates the used approximations with
@@ -1536,22 +1536,24 @@ def get_state(approx_map, state, extra_args=()):
         Numpy array with shape (N,) where `N = len(state)` .
 
     """
-    init_weights = dict()
+    weights = dict()
     for key, val in approx_map.items():
         if isinstance(key, LumpedApproximation):
             _weight_set = key.approximate_functions(val, *extra_args)
             new_d = dict(zip(key.weights, _weight_set))
         elif _weight_letter in str(key):
+            if len(val) == 1:
+                val = np.asscalar(val)
             new_d = {key: val}
         else:
             raise NotImplementedError
-        init_weights.update(new_d)
+        weights.update(new_d)
     try:
-        y0 = np.array([init_weights[lbl] for lbl in state])
+        q0 = np.array([weights[lbl] for lbl in state])
     except KeyError as e:
         raise ValueError("No information provided for the calculation of "
                          "element '{}’ of the state vector.".format(e))
-    return y0
+    return q0
 
 
 def _sort_weights(weights, ss_sys, approximations, inp_values):

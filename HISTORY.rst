@@ -73,3 +73,37 @@ Bugfixes:
 * Bugfix for derivatives of `Input`
 * Bugfixes  for `SimulationInput`
 * Fixed typos in various docstrings
+
+
+0.5.1 (2020-09-23)
+---------------------
+
+Bugfixes:
+
+* Problem with nan values in EvalData
+* Activation of numpy strict mode in normal operation
+* Comparison warnings in various places
+* Issues with evaluation of ComposedFunctionVector
+* Errors in evaluate_approximation with CompoundFunctionVectors
+* Deprecation warnings in visualization code
+* Broken default color scheme now uses matplotlib defaults
+* Corner cases for evaluate approximation
+* Made EvalData robust against NaN values in int output data array
+* Index error in animation handler of SurfacePlot
+* Added support for nan values in SurfacePlot
+* Removed strict type check to supply different systems for simulation
+* Added correct handling an NaN to spline interpolator of EvalData
+* Several issues in PgSurfacePlot
+* Introduced fill value for EvalData objects
+* Deactivated SplineInterpolator due to bad performance
+* Cleanup in SWM example tests
+* Suppressed plots in examples for global test run
+* Complete weak formulation test case for swm example
+* Updated test command since call via setup.py got deprecated
+
+CI related changes:
+
+* Solved issues with screen buffer
+* restructured test suite
+* test now run on the installed package instead of the source tree
+* updated rtd config to enable building the documentation again

@@ -17,31 +17,29 @@ services:
 addons:
   apt:
     packages:
-    # Needed to start x virtual framebuffer
+    # Needed to start x virtual framebuffer (this is not the right way...)
+    - libxcb1
     - libxkbcommon-x11-0
+    - libxcb-icccm4
+    - libxcb-image0
+    - libxcb-keysyms1
+    - libxcb-randr0
+    - libxcb-render-util0
+    - libxcb-xinerama0
 
 python:
   - 3.5
   - 3.6
   - 3.7
+  - 3.8
 
 env:
   - DIST=pypi
   - DIST=anaconda
 
-matrix:
+jobs:
   fast_finish: true
 
-  # dont take care of anaconda or older python versions
-  allow_failures:
-  - env: DIST=anaconda
-
-  # dont test latest python version with anaconda
-  exclude:
-      - python: 3.7
-        env: anaconda
-        # Maybe not needed, try it if you are interested
-        sudo: true
 
 install:
   - >
@@ -61,15 +59,20 @@ install:
       pip install codecov;
       conda list;
     else
-      pip install -r test_requirements.txt;
-      pip install .;
+      pip install --upgrade pip;
+      pip install ".[tests]";
       pip list;
     fi;
 
 script:
-  - coverage run --omit=pyinduct/tests/*,setup.py setup.py test;
+  #- export QT_DEBUG_PLUGINS=1;
+  # create temporal directory to prevent running the tests on the source
+  # directly instead of testing the installed version
+  - mkdir tmp;
+  - cd tmp;
+  - coverage run --omit="pyinduct/tests/*" -m pyinduct.run_tests --no-plots;
 
 after_success:
-  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.7" && "$DIST" == "pypi" ]]; then
+  - if [[ "$TRAVIS_PYTHON_VERSION" == "3.8" && "$DIST" == "pypi" ]]; then
       codecov;
     fi

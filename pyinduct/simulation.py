@@ -568,7 +568,7 @@ class CanonicalForm(object):
         if term["name"] == "f":
             if ("order" in term) \
                 or ("exponent" in term
-                    and term["exponent"] is not 0):
+                    and term["exponent"] != 0):
                 warnings.warn("order and exponent are ignored for f_vector!")
             f_vector = self.matrices.get("f", np.zeros_like(value))
             self.matrices["f"] = value + f_vector
@@ -1458,17 +1458,29 @@ def evaluate_approximation(base_label, weights, temp_domain, spat_domain, spat_o
     """
     funcs = get_base(base_label).derive(spat_order).fractions
     if weights.shape[1] != funcs.shape[0]:
-        raise ValueError("weights (len={0}) have to fit provided functions (len={1})!".format(weights.shape[1],
-                                                                                              funcs.size))
+        raise ValueError("weights (len={0}) have to fit provided functions "
+                         "(len={1})!".format(weights.shape[1], funcs.size))
 
     # evaluate shape functions at given points
-    shape_vals = np.array([func.evaluation_hint(spat_domain) for func in funcs])
+    shape_vals = np.array([func.evaluation_hint(spat_domain)
+                           for func in funcs]).T
 
-    def eval_spatially(weight_vector):
-        return np.real_if_close(np.dot(weight_vector, shape_vals), 1000)
+    if shape_vals.ndim == 2:
+        res = weights @ shape_vals.T
+    else:
+        # get extra dims to the front in both arrays
+        extra_axes = range(1, shape_vals.ndim - 1)
+        axes_idxs = np.array(extra_axes)
+        b_shape_vals = np.swapaxes(shape_vals, 0, -1)
+        b_shape_vals = np.moveaxis(b_shape_vals, axes_idxs, axes_idxs-1)
+        w_shape = (*np.array(shape_vals.shape)[axes_idxs], *weights.shape)
+        b_weights = np.broadcast_to(weights, w_shape)
+        b_res = b_weights @ b_shape_vals
+        res = np.moveaxis(b_res, axes_idxs-1, axes_idxs+1)
 
-    data = np.apply_along_axis(eval_spatially, 1, weights)
-    return EvalData([temp_domain.points, spat_domain.points], data, name=name)
+    ed = EvalData([temp_domain.points, spat_domain.points], res,
+                  name=name, fill_axes=True)
+    return ed
 
 
 def set_dominant_labels(canonical_equations, finalize=True):
@@ -1554,8 +1566,8 @@ def set_dominant_labels(canonical_equations, finalize=True):
 
 class SimulationInputVector(SimulationInput):
     """
-    A simulation input which combines :py:class:`.SimulationInput`s into a
-    column vector.
+    A simulation input which combines :py:class:`.SimulationInput` objects into
+    a column vector.
 
     Args:
         input_vector (array_like): Simulation inputs to stack.
@@ -1578,6 +1590,9 @@ class SimulationInputVector(SimulationInput):
         return self._input_vector[item]
 
     def append(self, input_vector):
+        """
+        Add an input to the vector.
+        """
         inputs = self._sanitize_input_vector(input_vector)
         self._input_vector = np.hstack((self._input_vector, inputs))
 

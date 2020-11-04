@@ -5,6 +5,7 @@ import warnings
 import numbers
 
 import numpy as np
+import numpy.ma as ma
 import collections
 from copy import copy, deepcopy
 from numbers import Number
@@ -16,14 +17,16 @@ from scipy.interpolate import interp1d, interp2d, RectBivariateSpline, RegularGr
 
 from .registry import get_base
 
-__all__ = ["Domain", "EvalData", "Parameters", "find_roots", "sanitize_input",
-           "real", "Base", "BaseFraction", "StackedBase", "Function",
-           "ComposedFunctionVector", "normalize_base", "project_on_base",
-           "change_projection_base", "back_project_from_base",
-           "calculate_scalar_product_matrix", "dot_product_l2",
+__all__ = ["Domain", "EvalData", "Parameters",
+           "Base", "BaseFraction", "StackedBase",
+           "Function", "ConstantFunction", "ComposedFunctionVector",
+           "find_roots", "sanitize_input", "real", "dot_product_l2",
+           "normalize_base", "project_on_base", "change_projection_base",
+           "back_project_from_base",
+           "calculate_scalar_product_matrix",
            "calculate_base_transformation_matrix",
            "calculate_expanded_base_transformation_matrix",
-           "dot_product_l2", "ConstantFunction"]
+           ]
 
 
 def sanitize_input(input_object, allowed_type):
@@ -164,6 +167,23 @@ class BaseFraction:
         """
         raise NotImplementedError()
 
+    def evaluation_hint(self, values):
+        """
+        If evaluation can be accelerated by using special properties of a function, this function can be
+        overwritten to performs that computation. It gets passed an array of places where the caller
+        wants to evaluate the function and should return an array of the same length, containing the results.
+
+        Note:
+            This implementation just calls the normal evaluation hook.
+
+        Args:
+            values: places to be evaluated at
+
+        Returns:
+            numpy.ndarray: Evaluation results.
+        """
+        return self(values)
+
 
 class Function(BaseFraction):
     """
@@ -183,20 +203,19 @@ class Function(BaseFraction):
     or directly provide a callable *eval_handle* and callable
     *derivative_handles* if spatial derivatives are required for the
     application.
+
+    Args:
+        eval_handle (callable): Callable object that can be evaluated.
+        domain((list of) tuples): Domain on which the eval_handle is defined.
+        nonzero(tuple): Region in which the eval_handle will return
+        nonzero output. Must be a subset of *domain*
+        derivative_handles (list): List of callable(s) that contain
+        derivatives of eval_handle
     """
 
     # TODO: overload add and mul operators
 
     def __init__(self, eval_handle, domain=(-np.inf, np.inf), nonzero=(-np.inf, np.inf), derivative_handles=None):
-        """
-        Args:
-            eval_handle (callable): Callable object that can be evaluated.
-            domain((list of) tuples): Domain on which the eval_handle is defined.
-            nonzero(tuple): Region in which the eval_handle will return
-                nonzero output. Must be a subset of *domain*
-            derivative_handles (list): List of callable(s) that contain
-                derivatives of eval_handle
-        """
         super().__init__(None)
         self._vectorial = False
         self._function_handle = None
@@ -429,23 +448,6 @@ class Function(BaseFraction):
         new_obj.function_handle = new_obj.derivative_handles.pop(0)
         return new_obj
 
-    def evaluation_hint(self, values):
-        """
-        If evaluation can be accelerated by using special properties of a function, this function can be
-        overwritten to performs that computation. It gets passed an array of places where the caller
-        wants to evaluate the function and should return an array of the same length, containing the results.
-
-        Note:
-            This implementation just calls the normal evaluation hook.
-
-        Args:
-            values: places to be evaluated at
-
-        Returns:
-            numpy.ndarray: Evaluation results.
-        """
-        return self(values)
-
     def scalar_product_hint(self):
         """
         Return the hint that the :py:func:`._dot_product_l2` has to
@@ -597,14 +599,11 @@ class ComposedFunctionVector(BaseFraction):
         BaseFraction.__init__(self, {"funcs": funcs, "scalars": scals})
 
     def __call__(self, arguments):
-        f_res = np.atleast_2d([f(arguments) for f in self.members["funcs"]]).T
-        s_res = np.atleast_2d([s for s in self.members["scalars"]]).T
-        if f_res.shape[1] > 1:
-            s_res = np.broadcast_to(s_res.T, f_res.shape)
-            res = np.hstack((f_res, s_res))
-        else:
-            res = np.vstack((f_res, s_res))
-        res = res.squeeze()
+        f_res = np.array([f(arguments) for f in self.members["funcs"]])
+        s_res = self.members["scalars"]
+        if f_res.ndim > 1:
+            s_res = s_res[:, None] * np.ones_like(f_res)
+        res = np.concatenate((f_res, s_res))
         return res
 
     def scalar_product_hint(self):
@@ -2845,6 +2844,7 @@ class EvalData:
                 [a.flatten() for a in np.meshgrid(*interp_axis, indexing="ij")])
             interpolated_output = self._interpolator(coords.T).reshape(dims)
 
+        out_arr = ma.masked_invalid(interpolated_output).squeeze()
         return EvalData(input_data=domains,
-                        output_data=np.squeeze(interpolated_output),
+                        output_data=out_arr,
                         name=self.name)

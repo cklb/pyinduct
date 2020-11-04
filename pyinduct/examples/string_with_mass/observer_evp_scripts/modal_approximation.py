@@ -34,17 +34,20 @@ def _pprint(item, discard_sv=True):
 def _numeric_integration(f1, f2, bounds, coef):
     iv, lb, ub = bounds
     f1 = sp.sympify(f1)
-    if any([c in f1.atoms(sp.Function) or sp.diff(c, sym.t) in f1.atoms(sp.Function)
-            for c in coef]):
-        vec, _ = _linear_eq_to_matrix([f1], coef)
+    occurrences = [c in f1.atoms(sp.Function)
+                   or sp.diff(c, sym.t) in f1.atoms(sp.Function)
+                   for c in coef]
+    if any(occurrences):
+        # handle derivatives first
+        coef_ders = sp.Matrix([sp.diff(c, sym.t) for c in coef])
+        vec, _ = _linear_eq_to_matrix(f1, coef_ders)
         if_ = [lambdify(iv, el * f2, modules="numpy") for el in vec]
-        res = np.sum(
-            [quad(f, lb, ub)[0] * c for c, f in zip(coef, if_)])
-        vec, _ = _linear_eq_to_matrix([f1],
-                                      [sp.diff(c, sym.t) for c in coef])
+        res = np.sum([quad(f, lb, ub)[0] * sp.diff(c, sym.t)
+                      for c, f in zip(coef, if_)])
+        rem_f1 = f1 - (vec * coef_ders)[0]
+        vec, _ = _linear_eq_to_matrix(rem_f1, sp.Array(coef))
         if_ = [lambdify(iv, el * f2, modules="numpy") for el in vec]
-        res += np.sum([quad(f, lb, ub)[0] * sp.diff(c, sym.t) for c, f in
-                       zip(coef, if_)])
+        res += np.sum([quad(f, lb, ub)[0] * c for c, f in zip(coef, if_)])
     else:
         if_ = lambdify(iv, (f1 * f2).doit(), modules="numpy")
         res = quad(if_, lb, ub)[0]
@@ -72,7 +75,16 @@ def _inner_product_nf(primal, dual, coef):
 
 
 def _linear_eq_to_matrix(leq, coef):
-    mat, _leq = sp.linear_eq_to_matrix(leq, coef)
+    try:
+        iter(coef)
+    except TypeError:
+        coef = sp.Array(coef)
+
+    # substitute objects with dummies to circumvent problems
+    d_map = {c: sp.Dummy() for c in coef}
+    d_coef = coef.xreplace(d_map)
+    d_leq = leq.xreplace(d_map)
+    mat, _leq = sp.linear_eq_to_matrix(d_leq, *d_coef)
     return mat, -_leq
 
 
@@ -81,17 +93,15 @@ def build_bases_for_modal_observer_approximation(m):
         raise ValueError("Only even number of eigenvalues supported.")
 
     n = int(m / 2)
-    coef = [c(sym.t) for c in sp.symbols("c_:{}".format(n*2), cls=sp.Function)]
+    coef = [sp.Function("c_{}".format(i))(sym.t) for i in range(n * 2)]
 
     # solve eigenvalue problems in  normal form coordinates by hand: manual = 1
     # or derive from the solutions in original coordinates: manual = 0
     manual = 1
 
-
     # compute eigenvalues
     from pyinduct.examples.string_with_mass.utils import find_eigenvalues
     eig_om, eig_vals = find_eigenvalues(n)
-
 
     # fill primal base list
     from pyinduct.examples.string_with_mass.observer_evp_scripts.evp_primal import phi0, phi00, real_phi, imag_phi
@@ -118,7 +128,6 @@ def build_bases_for_modal_observer_approximation(m):
         raise NotImplementedError(
             "Leads to a differential equation, which coincides with the"
             "eigenvalue problem. Hence, there is no alternetive 'easy way'.")
-
 
     # fill dual base list
     from pyinduct.examples.string_with_mass.observer_evp_scripts.evp_dual import psi0, psi00, real_psi, imag_psi
@@ -153,7 +162,6 @@ def build_bases_for_modal_observer_approximation(m):
                          sp.diff(f, sym.theta, sym.theta)]
                         for f in dual_base_flat]
 
-
     # build bi-orthonormal base
     for i, (ef, d_ef, d_ef_nf) in enumerate(zip(primal_base, dual_base, dual_base_nf)):
         c = _inner_product(ef, d_ef, coef)
@@ -165,7 +173,6 @@ def build_bases_for_modal_observer_approximation(m):
                 b, dual_base_nf[i + 1], coef)
             dual_base_nf[i] = list(np.array(dual_base_nf[i]) * -scale * (-1 if i == 0 else 1))
             dual_base_nf[i + 1] = list(np.array(dual_base_nf[i + 1]) * scale)
-
 
     # print bases
     if 0:
@@ -181,7 +188,7 @@ def build_bases_for_modal_observer_approximation(m):
     return primal_base, primal_base_nf, dual_base, dual_base_nf, eig_vals
 
 
-def get_observer_gain(spring_damper_params=list()):
+def get_observer_gain(spring_damper_params=tuple()):
 
     # observer gain
     a = np.array([0,
@@ -217,7 +224,7 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
     n = int(m / 2)
     assert all([len(it_) == m for it_ in (primal_base_nf, dual_base, dual_base_nf, eig_vals)])
 
-    coef = [c(sym.t) for c in sp.symbols("c_:{}".format(n*2))]
+    coef = sp.Array([sp.Function("c_{}".format(i))(sym.t) for i in range(n * 2)])
 
     # approximate state
     x = _sum([c * sp.Matrix(f) for c, f in zip(coef, primal_base)])
@@ -226,13 +233,11 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
     xi1 = np.sum([c * f[2] for c, f in zip(coef, primal_base)])
     xi2 = np.sum([c * f[3] for c, f in zip(coef, primal_base)])
 
-
     # approximate normal form state
     eta = _sum([c * sp.Matrix(f) for c, f in zip(coef, primal_base_nf)])
     eta1 = np.sum([c * f[0] for c, f in zip(coef, primal_base_nf)])
     eta2 = np.sum([c * f[1] for c, f in zip(coef, primal_base_nf)])
     eta3 = np.sum([c * f[2] for c, f in zip(coef, primal_base_nf)])
-
 
     # test functions
     psi = [sp.Matrix(tf) for tf in dual_base]
@@ -241,13 +246,11 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
     tau1 = [tf[2] for tf in dual_base]
     tau2 = [tf[3] for tf in dual_base]
 
-
     # normal form test functions
     nu = [sp.Matrix(tf) for tf in dual_base_nf]
     nu1 = [tf[0] for tf in dual_base_nf]
     nu2 = [tf[1] for tf in dual_base_nf]
     nu3 = [tf[2] for tf in dual_base_nf]
-
 
     # choose kind of desired dynamic
     spring_damper = 0
@@ -262,17 +265,19 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
     # observer projections
     if 1:
         observer_projections = [
-            (_inner_product_nf(l, ftf, coef) + l_bc * ftf3.subs(sym.theta, -1)) * sym.yt(sym.t)
+            (_inner_product_nf(l, ftf, coef)
+             + l_bc * ftf3.subs(sym.theta, -1)) * sym.yt(sym.t)
             for ftf, ftf3 in zip(nu, nu3)]
     else:
         observer_projections = [
-            (-_inner_product_nf(a_desired, ftf, coef) - a_bc_desired * ftf3.subs(sym.theta, -1) - ftf3.subs(sym.theta, 1)) * sym.yt(sym.t)
+            (-_inner_product_nf(a_desired, ftf, coef)
+             - a_bc_desired * ftf3.subs(sym.theta, -1)
+             - ftf3.subs(sym.theta, 1)) * sym.yt(sym.t)
             for ftf, ftf3 in zip(nu, nu3)]
 
-
     # just the unbounded part
-    L_unbounded = sp.Matrix([[l_bc[0] * ftf3.subs(sym.theta, -1)] for ftf3 in nu3])
-
+    L_unbounded = sp.Matrix([[l_bc[0] * ftf3.subs(sym.theta, -1)]
+                             for ftf3 in nu3])
 
     # project test functions on state space
     C = list()
@@ -286,7 +291,7 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
         for tf, tf1, tf2, t1, t2
         in zip(psi, psi1, psi2, tau1, tau2)
     ]
-    C.append(sp.linear_eq_to_matrix([xi1], coef)[0])
+    C.append(_linear_eq_to_matrix(xi1, coef)[0])
     system_projections_nf = [
         -_inner_product_nf(sp.diff(eta, sym.t), ftf, coef)
         + eta1 * ftf2
@@ -300,23 +305,22 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
         for ftf, ftf1, ftf2, ftf3
         in zip(nu, nu1, nu2, nu3)
     ]
-    C.append(sp.linear_eq_to_matrix([eta3.subs(sym.theta, 1)], coef)[0])
-
+    C.append(_linear_eq_to_matrix(eta3.subs(sym.theta, 1), coef)[0])
 
     # add observer projections to the system projections
-    projections = [sp + op for sp, op in zip(system_projections,
-                                             observer_projections)]
-    projections_nf = [sp + op for sp, op in zip(system_projections_nf,
-                                                observer_projections)]
-
+    projections = sp.Matrix([sp + op for sp, op in zip(system_projections,
+                                                       observer_projections)])
+    projections_nf = sp.Matrix([sp + op for sp, op in zip(system_projections_nf,
+                                                          observer_projections)])
 
     # parse matrices
     E1, E0, G, J, A, B, L = [[None, None] for _ in range(7)]
     for i, proj in enumerate([projections, projections_nf]):
-        E1[i], proj = _linear_eq_to_matrix(proj, [sp.diff(c, sym.t) for c in coef])
+        E1[i], proj = _linear_eq_to_matrix(proj, sp.Array([sp.diff(c, sym.t)
+                                                           for c in coef]))
         E0[i], proj = _linear_eq_to_matrix(proj, coef)
-        G[i], proj = _linear_eq_to_matrix(proj, [sym.u(sym.t)])
-        J[i], proj = _linear_eq_to_matrix(proj, [sym.yt(sym.t)])
+        G[i], proj = _linear_eq_to_matrix(proj, sym.u(sym.t))
+        J[i], proj = _linear_eq_to_matrix(proj, sym.yt(sym.t))
         if proj != proj * 0:
             print("\n Something went wrong! This is left:")
             _pprint(proj, discard_sv=False)
@@ -331,7 +335,6 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
         A[i] = E0[i]
         B[i] = G[i]
         L[i] = J[i]
-
 
     # display matrices
     print("\n A")
@@ -348,7 +351,6 @@ def validate_modal_bases(primal_base, primal_base_nf, dual_base, dual_base_nf,
     print("\n L")
     np.testing.assert_array_almost_equal(L[0], L[1])
     _pprint((L[0], L[1]))
-
 
     # compare eigenvalue
     print("\n open loop eigenvalues")
